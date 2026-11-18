@@ -1,0 +1,52 @@
+# Sandpit
+
+A pixel-art RC construction toy for the browser. Open **index.html** to play. The game fits in one file and works offline. The hosted version can also use two Google Fonts.
+
+![Sandpit at the pit rim](verification/title.png)
+
+## The field
+
+Four machines share a 2.7 m × 2 m sandbox. The bulldozer moves a wedge of sand ahead of its blade. The loader and excavator hold real payloads. Raise a loaded bucket over the truck bed to transfer its contents, then drive the truck to the fill site and tip the bed.
+
+- **Free Play** — adjust the spigot and rain in the field guide.
+- **Divert the Creek** — cut wet channels, build a berm, fill both marked basins and protect the camp.
+- **Coordinated Cut & Fill** — cut the spillway, load and drive the truck, then rebuild the leaking crest before the lower basin overflows.
+
+## Controls
+
+| Action | Keyboard and mouse | Standard gamepad | Touch |
+|---|---|---|---|
+| Drive and steer | WASD or arrows | Left stick, triggers for forward and reverse | Left stick |
+| Lift and lower | I / K or vertical drag | Right stick vertically | Right stick vertically |
+| Blade tilt, loader curl, excavator swing | J / L or horizontal drag | Right stick horizontally | Right stick horizontally |
+| Dig or empty a bucket | Hold E or Q | Hold X or Y | Hold Scoop low to dig, raised to dump |
+| Switch machine | 1–4, Tab, click a machine or bay card | LB / RB | Tap a machine, card or Rig |
+| Change view | Space or Camera | A | Camera |
+| Fine controls | F | Left stick click | Fine |
+| Recover the active rig | R | B | Select the rig, then use the field guide |
+| Frame the active rig at the pit rim | Scroll, or click the selected rig | Choose Chase for a close view | Tap the selected rig |
+
+Right-drag to orbit in the pit-rim view. Sound starts muted. The transmitter can collapse to leave more room for the field.
+
+## Simulation
+
+A 128 × 96 grid stores sand elevation, bedrock, suspended sediment, water depth, moisture and compaction. Every shared face has one signed pipe flux. A donor limiter prevents a cell from giving away more water or sediment than it holds. The sand budget includes loose terrain, suspended grains and all four payloads. Water has separate spigot, rain and outlet ledgers.
+
+Moisture changes the repose slope. Seepage can carry grains through a weak crest. Saturation, wheel compaction and undercutting affect how quickly it collapses. Tread ruts push their displaced sand to the sides.
+
+WebGL 2 draws the displaced surfaces, articulated machinery, shadow map and pixel outline pass. A software renderer shares the same field and vehicle models on browsers without WebGL 2. Canvas 2D draws the transmitter and world markers. Web Audio creates all sound.
+
+## Verification
+
+[Run results](verification/results.json) · [Headless acceptance suite](verification/check.py) · [Screenshots](verification/)
+
+The acceptance suite checks the final HTML directly with Chromium. It tests simultaneous touch inputs, Gamepad API mappings, both contracts, payload transfers, a natural levee breach and a seeded four-minute storm. Scenario fixtures stage machine positions. Digging, hydraulic transfers, water movement, truck travel and objective evaluation use the gameplay code.
+
+To repeat the tests with Python and Playwright installed, run:
+
+```sh
+python -m playwright install chromium
+python verification/check.py
+```
+
+An existing Chromium executable can be selected with `SANDPIT_CHROMIUM`. Set `SANDPIT_EVIDENCE` to direct captures and results to another directory. The suite uses a software WebGL implementation in headless mode. Physical handset frame rate and controller vibration require hardware checks.
