@@ -94,19 +94,21 @@ report.truck={bin,emittedLitres:emitted*AREA,remainingLitres:truck.payload*AREA,
 // that supported wedge until the material is distributed on the grid.
 initYard(0);
 const original=sandTotal();
-let peakBlade=0,peakWake=0;
+let peakBlade=0,peakWake=0,peakBladeLitres=0;
 for(let i=0;i<70;i++){
   physics(dt,{...noInput,drive:1,hy:i<18?-1:0});
   time+=dt;
-  peakBlade=Math.max(peakBlade,fallingSand.filter(p=>p.origin==='blade').length);
+  const blade=fallingSand.filter(p=>p.origin==='blade');
+  peakBlade=Math.max(peakBlade,blade.length);
+  peakBladeLitres=Math.max(peakBladeLitres,blade.reduce((v,p)=>v+p.amount*AREA,0));
   peakWake=Math.max(peakWake,fallingSand.filter(p=>p.origin==='tread').length);
   assert.ok(matches(sandTotal(),original),'Blade and treads conserve all transported soil');
 }
-assert.ok(peakBlade>10&&peakWake>4,'The drive generates a rolling cut and a tread wake');
+assert.ok(peakBlade>10&&peakWake>4&&peakBladeLitres>.40,'The drive generates a rolling cut and a tread wake');
 vehicles[0].speed=0;
 for(let i=0;i<160;i++)settleGrains(dt);
 assert.equal(fallingSand.length,0);
-report.dozer={peakBlade,peakWake};
+report.dozer={peakBlade,peakWake,peakBladeLitres};
 return report;
 `)(assert, () => ({ matches: false }));
 

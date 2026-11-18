@@ -26,6 +26,8 @@ jobs:
         run: |
           node verification/contact.cjs
           node verification/soil.cjs
+          node verification/hybrid-budget.cjs
+          node verification/grain-mesh.cjs
           node verification/material.cjs
           node verification/field-grains.cjs
           node verification/earthwork-grains.cjs

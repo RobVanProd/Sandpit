@@ -1,21 +1,21 @@
 {
-  "html_sha256": "d8ea38a09768b97ad8d8f9fb8189f7e4e117b46cd997b78d02109a61e57b24a4",
-  "browser": "153.0.8010.0",
+  "html_sha256": "e9bbed9b716ceb5af09468ba9d57ff97eec5ac562a0eba38d92b554e5210f7f7",
+  "browser": "138.0.7204.0",
   "transfers": {
-    "loader_to_truck_litres": 0.030724415232650806,
-    "excavator_to_truck_litres": 0.12094448386633933,
+    "loader_to_truck_litres": 0.030721955903945827,
+    "excavator_to_truck_litres": 0.12053771806135033,
     "truck_travel_before_tip": 4.149871048126746,
-    "final_sand_error_litres": 2.3874235921539366e-12
+    "final_sand_error_litres": 1.1368683772161603e-13
   },
   "natural_breach": {
-    "clock": 18.500000000000078,
+    "clock": 30.333333333334,
     "breaches": 1,
     "breachPos": [
-      -2.019685039370078,
+      -2.8700787401574797,
       2.842105263157894
     ],
     "initialCrest": 0.6919126207501645,
-    "crest": 0.4260447976770748
+    "crest": 0.47210449044887415
   },
   "randomized_storm": {
     "steps": 7200,
@@ -28,19 +28,19 @@
       120
     ],
     "peak_payload_litres": [
-      0.16461524797702443,
-      0.2272984000508683,
+      0.09081811023861626,
+      0.2813323768637685,
       0,
       0.48
     ],
     "travel": [
-      34.5136422487973,
-      35.28094671413516,
-      49.90714341187002,
-      22.21452204159824
+      32.286094501075155,
+      33.980943693423804,
+      45.30542314205635,
+      20.56365731135222
     ],
-    "max_sand_error_litres": 7.844391802791506e-12,
-    "max_water_error_litres": 2.6222224391858617e-10,
+    "max_sand_error_litres": 4.092726157978177e-12,
+    "max_water_error_litres": 2.6196644853371254e-10,
     "minimum_terrain": -0.42082017230157914,
     "maximum_terrain": 3.384023878305155,
     "min_water": 0,
@@ -51,35 +51,35 @@
   "renderer": "WebGL2",
   "cut_and_fill": {
     "fixture": "Staged excavation positions and truck heading. Normal hydraulics and forward drive.",
-    "truck_travel": 8.176260903239822,
+    "truck_travel": 7.392463837777654,
     "completion": {
-      "seconds": 75.33333333333162,
-      "cut": 0.349243347497256,
-      "berm": 0.8239057756189022,
-      "basinA": 0,
+      "seconds": 55.33333333333275,
+      "cut": 0.30818113469545366,
+      "berm": 2.0355126898677045,
+      "basinA": 0.006272642535018166,
       "basinB": 0,
       "campDepth": 0,
-      "received": 2.8,
-      "delivered": 2.8,
-      "cutDepth": 0.22952628115865947,
-      "crest": 0.9969052189585019
+      "received": 2.7837257471795325,
+      "delivered": 2.783725747179532,
+      "cutDepth": 0.17501797492406135,
+      "crest": 1.0469706473752294
     }
   },
   "creek_diversion": {
     "fixture": "Excavator staged to build a camp berm and cut two channels with the inlet closed. Production hydraulics, deposition and flow.",
-    "excavated_litres": 17.456689849496815,
-    "berm_payload_litres": 7.819108111294106,
+    "excavated_litres": 12.942513533354667,
+    "berm_payload_litres": 7.888264278828202,
     "completion": {
-      "seconds": 301.3333333333574,
-      "cut": 4.728520838672689,
-      "berm": 8.604343846721655,
-      "basinA": 0.19032541212099402,
-      "basinB": 0.38760511929025626,
-      "campDepth": 0.0008350705702180703,
+      "seconds": 299.3333333333558,
+      "cut": 5.0817467960687805,
+      "berm": 10.278909923629838,
+      "basinA": 0.19050728998412692,
+      "basinB": 0.4547271497695444,
+      "campDepth": 0.0007467720454057621,
       "received": 0,
       "delivered": 0,
       "cutDepth": 0,
-      "crest": -0.09931890630878153
+      "crest": -0.0993085230164501
     }
   },
   "multitouch": {

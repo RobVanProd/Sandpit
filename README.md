@@ -42,7 +42,7 @@ WebGL 2 draws the displaced surfaces, articulated machinery, shadow map and pixe
 
 ## Verification
 
-[Earthworks results](verification/results.json) · [Field Simulator results](verification/field-results.json) · [Vehicle and water captures](verification/polish.jpg) · [Earthworks browser suite](verification/check.py) · [Field Simulator browser suite](verification/field.cjs)
+[Earthworks results](verification/results.json) · [Field Simulator results](verification/field-results.json) · [Granular sand comparison](verification/granular-comparison.jpg) · [Vehicle and water captures](verification/polish.jpg) · [Earthworks browser suite](verification/check.py) · [Field Simulator browser suite](verification/field.cjs)
 
 Material and grain regressions are in [material.cjs](verification/material.cjs), [field-grains.cjs](verification/field-grains.cjs) and [earthwork-grains.cjs](verification/earthwork-grains.cjs). They exercise layer exposure, mass transfer and settling using the game code.
 

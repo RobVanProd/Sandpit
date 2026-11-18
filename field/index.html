@@ -1106,7 +1106,17 @@ function objectives(){trackLeveeNotch();basinFill=basins.map(([x,z,r])=>clamp(re
  if(win&&!goal){goal=true;$('mission').textContent='Program complete. The yard is yours.';announce('PROGRAM COMPLETE   /   free to continue')}}
 // The sandbox draws at pixel resolution into a colour + edge-information target.
 const world=$('world'),gl=world.getContext('webgl2',{alpha:false,antialias:false,depth:true,powerPreference:'high-performance'});
-if(!gl){$('fail').style.display='grid';$('fail').textContent='Sandpit needs WebGL 2. Enable hardware acceleration or open it in a WebGL 2 browser.';throw Error('WebGL 2 unavailable')}
+if(!gl){
+ const panel=$('fail');
+ panel.style.display='grid';
+ const box=document.createElement('div'),message=document.createElement('p'),alternate=document.createElement('a');
+ message.textContent='This edition needs WebGL 2. Earthworks can draw the sandbox in software on this device.';
+ alternate.href=location.protocol==='file:'?'../index.html':'https://robvanprod.github.io/Sandpit/';
+ alternate.textContent='Play Sandpit Earthworks';
+ alternate.style.cssText='display:inline-block;color:#ffcc89;padding:10px 16px;border:1px solid #94744e';
+ box.append(message,alternate);panel.append(box);
+ throw Error('WebGL 2 unavailable');
+}
 function program(vs,fs){let p=gl.createProgram();for(const [type,src] of [[gl.VERTEX_SHADER,vs],[gl.FRAGMENT_SHADER,fs]]){let s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));gl.attachShader(p,s)}gl.linkProgram(p);if(!gl.getProgramParameter(p,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(p));return p}
 const vertex=`#version 300 es
 precision highp float;
@@ -1180,7 +1190,12 @@ if(M>1.5&&M<2.5){vec2 wood=abs(n.z)>.6?vec2(P.x,P.y):abs(n.x)>.6?vec2(P.z,P.y):(
 if(M>2.5&&M<3.5){float blades=hash(floor(p*9.));rgb=mix(vec3(.34,.393,.199),vec3(.55,.57,.274),quant(clamp(.26+.37*noise(p*.27)+.23*m+.14*step(.78,blades),0.,1.),6.,b));rgb+=(blades>.92?.045:blades<.08?-.033:0.);rgb*=.96+.10*noise(p*.15);}
 if(M>3.5&&M<4.5){vec2 tiles=p*vec2(.45,.65);tiles.x+=mod(floor(tiles.y),2.)*.5;vec2 f=fract(tiles);rgb*=.88+hash(floor(tiles))*.15;rgb*=min(min(f.x,1.-f.x),min(f.y,1.-f.y))<.022?.64:1.;rgb+=(grain-.5)*.06;}
 float lighting=dot(n,sun);float band=lighting>.50?1.06:lighting>-.06?.88:.66;
-if(M>6.5&&M<7.5){float relief=.94+.12*hash(floor(P.xz*35.)+floor(P.y*36.));band=(.69+.36*max(0.,lighting))*relief;shadow=mix(.78,1.,(shadow-.43)/.57);}
+if(M>6.5&&M<8.5){
+ float jitter=hash(floor(P.xz*35.)+floor(P.y*36.)),dry=step(7.5,M);
+ float relief=mix(.93+.13*jitter,.971+.064*jitter,dry);
+ band=mix(.64+.42*max(0.,lighting),.78+.25*max(0.,lighting),dry)*relief;
+ shadow=mix(.78,1.,(shadow-.43)/.57);
+}
 rgb*=band;rgb*=mix(vec3(1.),mix(vec3(.69,.68,.68),vec3(1.),(shadow-.43)/.57),smoothstep(.04,.34,lighting));if(M>4.5&&M<5.5)rgb=C*(.86+.14*b);
 strength=(M<1.5?1.:0.);}
 rgb=floor(clamp(rgb,0.,1.)*64.+b)/64.;col=vec4(rgb,1);edge=vec4(n*.5+.5,strength>.5?clamp(.98-length(P-eye)*.009,.05,.99):0.);}
@@ -1570,11 +1585,11 @@ function cargoInk(v){
 }
 const grainRing=Array.from({length:5},(_,i)=>[Math.cos(i*TAU/5),Math.sin(i*TAU/5)]);
 let soilBuffer=new Float32Array(0);
-function grainClod(volume,moist,tone,yaw,pitch,loam,gravel,grounded){
- const width=1.03+.23*moist, height=grounded?.64:1;
+function grainClod(volume,moist,tone,yaw,pitch,loam,gravel,grounded,dry=false){
+ const width=dry?.84:1.03+.23*moist, height=(grounded?.64:1)*(dry?.62:1), length=dry?1.67:1;
  const rim=grainRing.map(([cos,sin],i)=>{
   const radial=.92+.15*Math.sin(i*5.2+tone*16);
-  return [cos*radial*width,height*.13*Math.sin(i*7+tone*9),sin*radial]
+  return [cos*radial*width,height*.13*Math.sin(i*7+tone*9),sin*radial*length]
  });
  const top=[.24,height*(.72+.16*moist),-.08],base=[-.22,-height*.61,.12];
  // Signed volume of the closed faceted hull in its own coordinates.
@@ -1595,14 +1610,14 @@ function grainClod(volume,moist,tone,yaw,pitch,loam,gravel,grounded){
   return [scale*(a*cs+depth*sn),scale*(b*cp+c*sp),scale*(depth*cs-a*sn)]
  };
  const vertices=[...rim,top,base].map(project);
- return {vertices,ink:grainPalette(moist,tone,loam,gravel)}
+ return {vertices,mat:dry?8:7,ink:grainPalette(moist,dry?mix(.5,tone,.34):tone,loam,gravel)}
 }
 function drawGrain(grain,x,y,z){
  const points=grain.vertices.map(([a,b,c])=>[x+a,y+b,z+c]);
  for(let i=0;i<5;i++){
   const j=(i+1)%5;
-  face([points[j],points[i],points[5]],grain.ink,7);
-  face([points[i],points[j],points[6]],grain.ink,7)
+  face([points[j],points[i],points[5]],grain.ink,grain.mat);
+  face([points[i],points[j],points[6]],grain.ink,grain.mat)
  }
 }
 function grainBed(v,joint){
@@ -1634,18 +1649,22 @@ function updateMovingSoil(){
   const grounded=p.mode!=='air',localMoisture=sample(wet,p.x,p.z)*(grounded?.85:.52);
   const moist=clamp(p.moisture??(localMoisture+loam*.16),0,1),tone=p.tone??.5;
   const angular=p.spin??p.yaw??0,rolling=p.mode==='sleep'?0:(p.age??time)*(grounded?5.6:3.8);
-  const yaw=angular+rolling*.55,pitch=grounded?Math.sin(rolling+tone*7)*.14:rolling+tone*7;
-  if(moist<.32&&volume>.0024){
+  const dry=moist<.33&&loam+gravel<.34,speed=Math.hypot(p.dx,p.dz),moving=speed>.08;
+  const yaw=dry&&moving?Math.atan2(p.dx,p.dz):angular+rolling*.55;
+  const pitch=dry
+   ? (grounded?0:Math.atan2(p.dy,Math.max(.16,speed))*.73)+Math.sin(rolling+tone*7)*.14
+   : grounded?Math.sin(rolling+tone*7)*.14:rolling+tone*7;
+  if(dry&&volume>.0024){
    // A dry parcel breaks into two touching subgrains at its physical center
    // of mass. The offsets balance and the two closed volumes sum to the parcel.
    const axis=[Math.cos(yaw),0,-Math.sin(yaw)];
-   const a=grainClod(volume*.65,moist,tone,yaw,pitch,loam,gravel,grounded);
-   const b=grainClod(volume*.35,moist,1-tone,yaw+.81,pitch-.2,loam,gravel,grounded);
+   const a=grainClod(volume*.65,moist,tone,yaw+.18,pitch,loam,gravel,grounded,true);
+   const b=grainClod(volume*.35,moist,1-tone,yaw-.22,pitch-.12,loam,gravel,grounded,true);
    const reach=Math.max(...a.vertices.map(q=>dot(q,axis)))-Math.min(...b.vertices.map(q=>dot(q,axis)));
    const dx=reach*axis[0],dz=reach*axis[2];
    drawGrain(a,p.x-dx*.35,p.y,p.z-dz*.35);
    drawGrain(b,p.x+dx*.65,p.y,p.z+dz*.65)
-  }else drawGrain(grainClod(volume,moist,tone,yaw,pitch,loam,gravel,grounded),p.x,p.y,p.z)
+  }else drawGrain(grainClod(volume,moist,tone,yaw,pitch,loam,gravel,grounded,dry),p.x,p.y,p.z)
  }
  if(data.length>soilBuffer.length)soilBuffer=new Float32Array(Math.max(data.length,2*soilBuffer.length,4096));
  soilBuffer.set(data);movingSoil.count=data.length/10;
@@ -1718,8 +1737,10 @@ function refreshSoilReadout(force=false) {
   const labels = {sand:'loose sand',loam:'loam',gravel:'gravel',rock:'bedrock'};
   const dominant = Object.keys(labels).reduce((a,b) => material[a] >= material[b] ? a : b);
   const movingLitres = fallingSand.reduce((total,g) => total + g.amount*AREA, 0);
+  const millilitres = movingLitres * 1000;
+  const quantity = millilitres > 0 && millilitres < .1 ? '<0.1' : millilitres < 10 ? Number(millilitres.toFixed(1)) : Math.round(millilitres);
   const value = 'Ground at tool · ' + labels[dominant] + '  /  Moving soil · ' +
-    fallingSand.length + ' clumps · ' + Math.round(movingLitres * 1000) + ' mL';
+    fallingSand.length + (fallingSand.length === 1 ? ' clump · ' : ' clumps · ') + quantity + ' mL';
   if (output.textContent !== value) output.textContent = value;
 }
 

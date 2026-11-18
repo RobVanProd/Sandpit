@@ -41,6 +41,6 @@ const {chromium}=require('playwright-core'),fs=require('fs'),path=require('path'
    const mold=Math.min(520,cut*.65);deposit(river(-1.6),-1.6,2.78,1.07,0,mold*.77);deposit(river(4.1),4.1,2.8,1.16,0,mold*.23);deposit(12,7,3.9,3.2,0,cut-mold);return {excavatedLitres:cut*AREA,bermLitres:mold*AREA}
  }));let won=false;for(let k=0;k<50;k++){await step(120);if(await E(()=>sandpitQA.stats().goal)){won=true;break}}
  console.log('Diverted creek:',earthworks);await stats('two-basin diversion');assert.ok(won,'Both basins fill while camp stays dry');await E(()=>sandpitQA.view(1));await draw(35);await shot('11-completed-diversion');
- assert.deepEqual(errors,[]);fs.writeFileSync('captures/report.json',JSON.stringify({reports,proof,errors,touch:cmd,earthworks},null,2));console.log('Headless browser acceptance passed.');
+ assert.deepEqual(errors,[]);fs.writeFileSync('captures/report.json',JSON.stringify({html_sha256:require('node:crypto').createHash('sha256').update(fs.readFileSync(here)).digest('hex'),reports,proof,errors,touch:cmd,earthworks},null,2));console.log('Headless browser acceptance passed.');
  await browser.close();
 })().catch(err=>{console.error(err);process.exit(1)});
