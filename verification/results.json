@@ -1,0 +1,108 @@
+{
+  "html_sha256": "2d40cf422c059b0f4a74ef1573823d7d8329f2de9bd7a76cd6ea4fd850f19dcf",
+  "browser": "153.0.8010.0",
+  "transfers": {
+    "loader_to_truck_litres": 0.4938779999999997,
+    "excavator_to_truck_litres": 0.30512486228756597,
+    "truck_travel_before_tip": 4.173698105708455,
+    "final_sand_error_litres": 7.275957614183426e-12
+  },
+  "natural_breach": {
+    "clock": 51.666666666666295,
+    "breaches": 1,
+    "breachPos": [
+      -2.8700787401574797,
+      2.842105263157894
+    ],
+    "initialCrest": 0.6919126207501645,
+    "crest": 0.5621287687468159
+  },
+  "randomized_storm": {
+    "steps": 7200,
+    "seconds": 240,
+    "seed": 43439,
+    "visits": [
+      120,
+      120,
+      120,
+      120
+    ],
+    "peak_payload_litres": [
+      0.24047731924259425,
+      0.73,
+      0,
+      0.48
+    ],
+    "travel": [
+      33.859575681787874,
+      35.30475620066788,
+      49.681984824060514,
+      22.47487750370767
+    ],
+    "max_sand_error_litres": 1.8985701899509877e-11,
+    "max_water_error_litres": 2.625917261411814e-10,
+    "minimum_terrain": -0.6428074797468016,
+    "maximum_terrain": 3.6271809837848754,
+    "min_water": 0,
+    "min_sediment": 0,
+    "finite": true,
+    "control_mode": "gamepad"
+  },
+  "renderer": "WebGL2",
+  "cut_and_fill": {
+    "fixture": "Staged excavation positions and truck heading. Normal hydraulics and forward drive.",
+    "truck_travel": 12.94735248741266,
+    "completion": {
+      "seconds": 30.00000000000065,
+      "cut": 1.1987051499125145,
+      "berm": 0.39190789326750264,
+      "basinA": 0,
+      "basinB": 0,
+      "campDepth": 0,
+      "received": 2.373337378699658,
+      "delivered": 0.47223000000000026,
+      "cutDepth": 0.505244541775437,
+      "crest": 1.0643574957405044
+    }
+  },
+  "creek_diversion": {
+    "fixture": "Excavator staged to build a camp berm and cut two channels. Bucket, deposition and flow use production logic.",
+    "excavated_litres": 51.649272858950944,
+    "completion": {
+      "seconds": 476.0000000001631,
+      "cut": 15.434447046814691,
+      "berm": 22.19238511316528,
+      "basinA": 0.8693946471057571,
+      "basinB": 0.19170157102869373,
+      "campDepth": 0.00240143661179043,
+      "received": 0,
+      "delivered": 0,
+      "cutDepth": 0,
+      "crest": -0.10800690916808145
+    }
+  },
+  "multitouch": {
+    "stick_inputs": {
+      "drive": 0.7179491447679924,
+      "turn": 0.1282051726654693,
+      "lift": 0.6666668089397582,
+      "side": 0.41025601900540865,
+      "dig": 0,
+      "dump": 0,
+      "feather": 0
+    },
+    "released": {
+      "drive": 0,
+      "turn": 0,
+      "lift": 0,
+      "side": 0,
+      "dig": 0,
+      "dump": 0,
+      "feather": 0
+    },
+    "active_after_switch": 1,
+    "fine_mode": "true"
+  },
+  "console_errors": [],
+  "page_errors": []
+}

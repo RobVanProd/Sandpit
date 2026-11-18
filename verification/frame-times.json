@@ -1,0 +1,11 @@
+{
+  "p50": 33.399999999999636,
+  "p95": 83.40000000000055,
+  "resolution": 272,
+  "physHz": 30,
+  "renderer": "WebGL2",
+  "html_sha256": "2d40cf422c059b0f4a74ef1573823d7d8329f2de9bd7a76cd6ea4fd850f19dcf",
+  "sample": "150 requestAnimationFrame intervals while holding W in Chromium 153 with headless SwiftShader, 1360 x 800 viewport",
+  "unit": "milliseconds",
+  "physical_gpu": false
+}
