@@ -1,6 +1,8 @@
 # Sandpit
 
-A pixel-art RC construction toy for the browser. Open **index.html** to play. The game fits in one file and works offline. The hosted version can also use two Google Fonts.
+[Play RC Earthworks](https://robvanprod.github.io/Sandpit/) · [Play RC Field Simulator](https://robvanprod.github.io/Sandpit/field/)
+
+A pixel-art RC construction toy for the browser. Open **index.html** for Earthworks or **field/index.html** for the Field Simulator shown in the gameplay trailer. Each edition has its own controls in the game. Each game fits in one file and works offline. The hosted version can also use two Google Fonts.
 
 ![Sandpit at the pit rim](verification/title.png)
 
@@ -38,7 +40,7 @@ WebGL 2 draws the displaced surfaces, articulated machinery, shadow map and pixe
 
 ## Verification
 
-[Run results](verification/results.json) · [Headless acceptance suite](verification/check.py) · [Screenshots](verification/)
+[Earthworks results](verification/results.json) · [Field Simulator results](verification/field-results.json) · [Vehicle and water captures](verification/polish.jpg) · [Earthworks browser suite](verification/check.py) · [Field Simulator browser suite](verification/field.cjs)
 
 The acceptance suite checks the final HTML directly with Chromium. It tests simultaneous touch inputs, Gamepad API mappings, both contracts, payload transfers, a natural levee breach and a seeded four-minute storm. Scenario fixtures stage machine positions. Digging, hydraulic transfers, water movement, truck travel and objective evaluation use the gameplay code.
 

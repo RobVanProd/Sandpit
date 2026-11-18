@@ -725,6 +725,7 @@
           recovers, X digs and Y dumps.
         </p>
         <p id="rigguide"></p>
+        <p><a href="https://robvanprod.github.io/Sandpit/field/" style="color: inherit" target="_blank" rel="noopener">Open RC Field Simulator</a></p>
         <div id="weather">
           <label
             >Spigot flow <input id="flow" type="range" min="0" max="100" value="60" />
@@ -806,6 +807,15 @@
         water = field(),
         sed = field(),
         wet = field(),
+        nextWet = field(),
+        soilStatic = field(),
+        soilDynamic = field(),
+        soilOut = field(),
+        soilIn = field(),
+        soilLimit = field(),
+        soilTransfer = new Float64Array(4 * NN),
+        soilSlide = new Int8Array(4 * NN),
+        soilDiagonal = Math.hypot(dx, dz),
         pack = field(),
         rut = field(),
         qx = field(),
@@ -901,7 +911,9 @@
         raining = false;
         $("rain").checked = false;
         $("flow").value = Math.round((flow / 0.6) * 100);
-        for (const a of [sed, wet, pack, rut, qx, qz, vel, earthworks]) a.fill(0);
+        rainAccum = 0;
+        for (const a of [sed, wet, pack, rut, qx, qz, vel, earthworks, soilSlide, soilTransfer])
+          a.fill(0);
         for (let i = 0; i < NN; i++) {
           const x = xx(i),
             z = zz(i),
@@ -1091,6 +1103,124 @@
         });
         return v / (n || 1);
       }
+      // Saturation is a proxy for pore moisture. It affects the grains while free
+      // surface water remains in the hydraulic ledger.
+      function soilMoistureStep(dt) {
+        const diffusion = Math.min(0.15, dt * 1.55);
+        for (let j = 0, i = 0; j < NZ; j++)
+          for (let k = 0; k < NX; k++, i++) {
+            const old = wet[i],
+              left = k > 0 ? wet[i - 1] : old,
+              right = k + 1 < NX ? wet[i + 1] : old,
+              up = j > 0 ? wet[i - NX] : old,
+              down = j + 1 < NZ ? wet[i + NX] : old;
+            let m = old + diffusion * (left + right + up + down - 4 * old);
+            const contact = water[i];
+            if (contact > 0.001)
+              m += (1 - m) * Math.min(1, dt * (0.6 + 8 * Math.min(1, contact / 0.085)));
+            else
+              m *= 1 - dt * (0.017 + 0.017 * (1 - m));
+            nextWet[i] = clamp(m, 0, 1);
+          }
+        wet.set(nextWet);
+      }
+      function soilSlopeStep(dt) {
+        // Compute candidate face transfers from a shared height snapshot. Each
+        // face remembers its direction and keeps flowing to the lower stopping angle.
+        soilOut.fill(0);
+        soilIn.fill(0);
+        for (let i = 0; i < NN; i++) {
+          const m = wet[i],
+            submerged = Math.min(1, water[i] / 0.14),
+            dampBond = 4 * m * (1 - m) * (1 - submerged);
+          soilStatic[i] = 0.6745 + (0.34 + 0.29 * pack[i]) * dampBond - 0.15 * submerged + 0.12 * pack[i];
+          soilDynamic[i] = soilStatic[i] - 0.125 - 0.29 * pack[i] * dampBond;
+        }
+        const rate = Math.min(0.22, dt * 5.9);
+        for (let j = 0, i = 0; j < NZ; j++)
+          for (let k = 0; k < NX; k++, i++) {
+            propose(0, k + 1 < NX, i, i + 1, dx, 1);
+            propose(1, j + 1 < NZ, i, i + NX, dz, 1);
+            propose(2, k + 1 < NX && j + 1 < NZ, i, i + NX + 1, soilDiagonal, 0.55);
+            propose(3, k > 0 && j + 1 < NZ, i, i + NX - 1, soilDiagonal, 0.55);
+          }
+        for (let i = 0; i < NN; i++)
+          soilLimit[i] = soilOut[i] > 0 ? Math.min(1, (h[i] - bed[i]) / soilOut[i]) : 0;
+        for (let i = 0; i < NN; i++) {
+          transfer(0, i, i + 1);
+          transfer(1, i, i + NX);
+          transfer(2, i, i + NX + 1);
+          transfer(3, i, i + NX - 1);
+        }
+        for (let i = 0; i < NN; i++) {
+          if (soilOut[i] === 0 && soilIn[i] === 0) continue;
+          const standing = Math.max(0, h[i] - bed[i] - soilOut[i] * soilLimit[i]);
+          const incoming = soilIn[i];
+          h[i] = bed[i] + standing + incoming;
+          // Grains lose their packing as they tumble and build a fresh toe.
+          if (incoming > 0) pack[i] *= standing / (standing + incoming);
+        }
+
+        function propose(direction, available, i, j, length, weight) {
+          if (!available) return;
+          const slot = direction * NN + i,
+            grade = h[i] - h[j],
+            sign = grade > 0 ? 1 : -1,
+            donor = sign === 1 ? i : j,
+            difference = Math.abs(grade),
+            alreadyMoving = soilSlide[slot] === sign;
+          if (
+            h[donor] > bed[donor] + 1e-9 &&
+            difference > length * (alreadyMoving ? soilDynamic[donor] : soilStatic[donor]) + 1e-5
+          ) {
+            const amount = (difference - length * soilDynamic[donor]) * rate * weight;
+            soilSlide[slot] = sign;
+            soilTransfer[slot] = sign * amount;
+            soilOut[donor] += amount;
+          } else {
+            soilSlide[slot] = 0;
+            soilTransfer[slot] = 0;
+          }
+        }
+        function transfer(direction, i, j) {
+          const amount = soilTransfer[direction * NN + i];
+          if (amount > 0) soilIn[j] += amount * soilLimit[i];
+          if (amount < 0) soilIn[i] -= amount * soilLimit[j];
+        }
+      }
+      function exchangeSediment(i, dt) {
+        const x = i % NX,
+          left = x ? qx[i - 1] : 0,
+          right = qx[i],
+          up = i >= NX ? qz[i - NX] : 0,
+          down = qz[i],
+          depth = water[i],
+          inverseDepth = 0.5 / (depth + 0.026),
+          vx = (left + right) * dx * inverseDepth,
+          vz = (up + down) * dz * inverseDepth,
+          speed = Math.sqrt(vx * vx + vz * vz);
+        vel[i] = mix(vel[i], Math.min(4, speed), 0.35);
+        // Drag on grains grows with speed squared. A downhill bed tilt lowers
+        // the threshold, while packing and capillary bonds increase it.
+        const gx = x && x < NX - 1 ? (h[i + 1] - h[i - 1]) / (2 * dx) : 0,
+          gz = i >= NX && i < NN - NX ? (h[i + NX] - h[i - NX]) / (2 * dz) : 0,
+          downslope = speed > 0.001 ? clamp(-(vx * gx + vz * gz) / speed, -0.5, 0.5) : 0,
+          m = wet[i],
+          dampBond = 4 * m * (1 - m) * (1 - Math.min(1, depth / 0.14)),
+          threshold = 0.089 * (1 + 2.05 * pack[i] + 0.45 * dampBond) * (1 - 0.8 * downslope),
+          excess = Math.max(0, 0.74 * speed * speed - threshold),
+          carrying = depth * Math.min(0.21, 0.051 * excess),
+          deficit = carrying - sed[i];
+        let move =
+          deficit > 0 && depth > 0.005
+            ? Math.min(h[i] - bed[i], deficit * dt * 2.4 / (1 + 2.0 * pack[i]))
+            : Math.min(0, deficit) * Math.min(1, dt * (depth < 0.008 ? 13 : 3.6 / (1 + speed)));
+        if (move < 0) {
+          const thickness = h[i] - bed[i];
+          pack[i] *= thickness / (thickness - move);
+        }
+        return Math.max(-sed[i], move);
+      }
       // One signed flux per shared face. A donor limiter caps total outflow before
       // equal-and-opposite water and sediment transfers are applied to both cells.
       function waterStep(dt) {
@@ -1152,25 +1282,14 @@
           if (qx[i]) qx[i] = flux(i, i + 1, qx[i]);
           if (qz[i]) qz[i] = flux(i, i + NX, qz[i]);
         }
-        let motion = 0;
         for (let i = 0; i < NN; i++) {
           water[i] = Math.max(0, water[i] + dw[i]);
           sed[i] += ds[i];
-          const speed = ((Math.abs(qx[i]) + Math.abs(qz[i])) * dx) / (0.035 + water[i]);
-          vel[i] = mix(vel[i], Math.min(4, speed), 0.35);
+        }
+        let motion = 0;
+        for (let i = 0; i < NN; i++) {
+          ds[i] = exchangeSediment(i, dt);
           motion += Math.abs(qx[i]) + Math.abs(qz[i]);
-          const capacity = water[i] * (speed * 0.045 + Math.min(0.08, Math.abs(dw[i]) * 0.7)),
-            de = capacity - sed[i];
-          let move =
-            de > 0
-              ? Math.min(h[i] - bed[i], de * dt * 1.9 * (1 - 0.78 * pack[i]) * (1 - 0.3 * wet[i]))
-              : de * Math.min(1, dt * (water[i] < 0.005 ? 8 : 1.7));
-          h[i] -= move;
-          sed[i] += move;
-          if (sed[i] < 0) {
-            h[i] += sed[i];
-            sed[i] = 0;
-          }
           // Boundaries drain water through a screened outlet. Trapped sediment settles in the field.
           if (i >= NN - NX && water[i] > 0.015) {
             const o = Math.min(water[i], (water[i] - 0.015) * dt * 2.4);
@@ -1178,43 +1297,14 @@
             outWater += o * area;
           }
         }
-        flowMotion = motion / NN;
-        // Capillary transport and repose use symmetric, height-conserving grain transfers.
-        const offset = stepNo & 1;
-        for (let j = 1; j < NZ - 1; j++)
-          for (let k = 1 + ((j + offset) % 2); k < NX - 1; k += 2) {
-            const i = j * NX + k;
-            let near = Math.max(wet[i - 1], wet[i + 1], wet[i - NX], wet[i + NX]);
-            wet[i] =
-              water[i] > 0.008
-                ? Math.min(1, wet[i] + dt * 8)
-                : clamp(wet[i] + dt * (Math.max(0, near - wet[i]) * 0.98 - 0.006), 0, 1);
-          }
-        function slump(i, j, spacing) {
-          let high = i,
-            lo = j;
-          if (h[j] > h[i]) {
-            high = j;
-            lo = i;
-          }
-          let m = wet[high],
-            saturated = Math.min(1, water[high] * 2.4),
-            repose = 0.6745 + 0.753 * m * (1 - saturated) + 0.18 * pack[high];
-          const excess = h[high] - h[lo] - spacing * repose;
-          if (excess > 0) {
-            let t = Math.min(h[high] - bed[high], excess * Math.min(0.46, dt * 5.0));
-            h[high] -= t;
-            h[lo] += t;
-          }
+        for (let i = 0; i < NN; i++) {
+          h[i] -= ds[i];
+          sed[i] += ds[i];
         }
-        for (let j = 0; j < NZ; j++)
-          for (let k = (j + offset) % 2; k < NX; k += 2) {
-            const i = k + j * NX;
-            if (k + 1 < NX) slump(i, i + 1, dx);
-            if (k > 0) slump(i, i - 1, dx);
-            if (j + 1 < NZ) slump(i, i + NX, dz);
-            if (j > 0) slump(i, i - NX, dz);
-          }
+        flowMotion = motion / NN;
+        soilMoistureStep(dt);
+        soilSlopeStep(dt);
+        const offset = stepNo & 1;
         // Pressure-dependent seepage through thin, weak ridges. Sediment travels to the downstream toe.
         const axis = stepNo & 2 ? 1 : NX;
         for (let j = 2; j < NZ - 2; j++)
@@ -1280,26 +1370,191 @@
         flash = s;
         flashT = 3;
       }
-      function toolPoint(n, r) {
-        const a = r.yaw + (n === 3 ? r.house : 0),
-          len = n === 3 ? 2.02 + 1.0 * r.reach : n === 1 ? 1.65 : n === 0 ? 1.36 : -1.53;
+      const loaderScoop = {
+        width: 1.76,
+        // Section from the rear mount, around the floor, to the cutting edge.
+        section: [[-0.24, 0.56], [-0.43, 0.41], [-0.43, 0.04], [-0.24, -0.17], [0.40, -0.18], [0.91, -0.10]],
+        lip: [0, -0.105, 1.05],
+      };
+      const excavatorScoop = {
+        width: 0.72,
+        section: [[-0.09, 0.50], [-0.24, 0.37], [-0.24, 0.05], [-0.10, -0.13], [0.23, -0.14], [0.46, -0.09]],
+        lip: [0, -0.11, 0.59],
+      };
+      function joint(parent, x, y, z, ax = 0, ay = 0, az = 0) {
+        let m = mm(parent, trans(x, y, z));
+        if (ay) m = mm(m, rot(1, ay));
+        if (ax) m = mm(m, rot(0, ax));
+        if (az) m = mm(m, rot(2, az));
+        return m;
+      }
+      function rigFrame(r) {
+        return joint(eye4(), r.x, r.y + 0.012, r.z, r.pitch, r.yaw, r.roll);
+      }
+      function loaderFront(r, base) {
+        return joint(base, 0, 0, 0.02, 0, r.steer * 0.29);
+      }
+      function loaderRear(r, base) {
+        return joint(base, 0, 0, -0.04, 0, -r.steer * 0.22);
+      }
+      function excavatorHouse(r, base) {
+        return joint(base, 0, 0.81, 0, 0, r.house);
+      }
+      function truckBed(r, base) {
+        return joint(base, 0, 0.77, -1.31, -r.lift * 1.12);
+      }
+      function tailgateAngle(r) {
+        return clamp((r.lift - 0.20) * 1.65, 0, 1.18);
+      }
+      function dozerBlade(r, base) {
+        return joint(base, 0, 0.14 + r.lift, 1.42, -0.09, 0, (r.curl - 0.5) * 0.32);
+      }
+      function scoopPose(n, r, base = rigFrame(r)) {
+        const loader = n === 1,
+          scoop = loader ? loaderScoop : excavatorScoop,
+          frame = loader ? loaderFront(r, base) : excavatorHouse(r, base),
+          pivot = loader
+            ? [0, 0.25 + 2.22 * r.lift, 1.88 + 0.14 * Math.sin(r.lift * PI) - 0.08 * r.lift]
+            : [0.29, -1.91 + r.lift * 3.95, 2.02 + r.reach],
+          tilt = loader ? (0.43 - r.curl) * 1.68 : (0.44 - r.curl) * 1.52;
+        let tool = joint(frame, ...pivot, tilt);
+        const lip = tf(tool, scoop.lip),
+          vertical = frame[5],
+          contactFloor = sample(h, lip[0], lip[2]) - (loader ? 0.11 : 0.22);
+        if (lip[1] < contactFloor) {
+          pivot[1] += (contactFloor - lip[1]) / vertical;
+          tool = joint(frame, ...pivot, tilt);
+        }
+        return { pivot, tilt, tool, lip: tf(tool, scoop.lip) };
+      }
+      function loaderLinkage(r, pivot, tilt, side) {
+        const coupler = joint(eye4(), ...pivot, tilt);
         return [
-          clamp(r.x + Math.sin(a) * len, -W / 2 + 0.22, W / 2 - 0.22),
-          clamp(r.z + Math.cos(a) * len, -D / 2 + 0.22, D / 2 - 0.22),
+          [side * 0.45, 1.0, 0.42],
+          [side * 0.51, 0.9 + r.lift * 0.83, 1.22],
+          tf(coupler, [side * 0.48, 0.14, -0.49]),
+          tf(coupler, [side * 0.31, 0.37, -0.49]),
         ];
+      }
+      function excavatorLinkage(r, pivot, tilt) {
+        return [
+          [0.31, 0.38, 0.51],
+          [0.29, 1.35 + r.lift * 1.18, 1.12 + r.reach * 0.43],
+          tf(joint(eye4(), ...pivot, tilt), [0, 0.24, -0.32]),
+        ];
+      }
+      function toolTip(n, r) {
+        if (n === 1 || n === 3) return scoopPose(n, r).lip;
+        const base = rigFrame(r);
+        return n === 0
+          ? tf(dozerBlade(r, base), [0, 0.045, 0.265])
+          : tf(truckBed(r, base), [0, 0.08, -0.18]);
+      }
+      function toolPoint(n, r) {
+        const [x, , z] = toolTip(n, r);
+        return [clamp(x, -W / 2 + 0.22, W / 2 - 0.22), clamp(z, -D / 2 + 0.22, D / 2 - 0.22)];
+      }
+      // Project each solid assembly onto its chassis or joint axes and keep its height interval.
+      // The open truck bed has a floor and four walls so a bucket can pass above its rim.
+      function contactBox(m, x, y, z, w, ht, d) {
+        const angle = Math.atan2(m[8], m[10]),
+          u = [Math.cos(angle), -Math.sin(angle)],
+          v = [Math.sin(angle), Math.cos(angle)],
+          center = tf(m, [x, y, z]);
+        const radius = (axis) =>
+          (Math.abs(m[0] * axis[0] + m[2] * axis[1]) * w +
+            Math.abs(m[4] * axis[0] + m[6] * axis[1]) * ht +
+            Math.abs(m[8] * axis[0] + m[10] * axis[1]) * d) * 0.5;
+        return { center, u, v, w: radius(u), d: radius(v),
+          h: (Math.abs(m[1]) * w + Math.abs(m[5]) * ht + Math.abs(m[9]) * d) * 0.5 };
+      }
+      function contactParts(n, r) {
+        const base = rigFrame(r), parts = [],
+          add = (...box) => parts.push(contactBox(...box)),
+          arm = (frame, points, width) => {
+            for (let i = 0; i < points.length - 1; i++) {
+              const a = points[i], b = points[i + 1],
+                [dx, dy, dz] = b.map((v, axis) => v - a[axis]),
+                length = Math.hypot(dx, dy, dz),
+                center = a.map((v, axis) => (v + b[axis]) * 0.5);
+              add(joint(frame, ...center, -Math.atan2(dy, Math.hypot(dx, dz)), Math.atan2(dx, dz)),
+                0, 0, 0, width, width, length);
+            }
+          },
+          scoop = (spec, tool) => {
+            const rear = spec.section[1][0];
+            add(tool, 0, 0.19, (spec.lip[2] + rear) * 0.5, spec.width, 0.72, spec.lip[2] - rear);
+          };
+        if (n === 0) {
+          add(base, 0, 0.43, 0, 1.83, 0.72, 2.28);
+          add(base, 0, 1.14, 0.20, 1.26, 0.74, 1.60);
+          add(base, 0, 1.44, -0.49, 1.05, 0.82, 0.95);
+          add(dozerBlade(r, base), 0, 0.37, 0.06, 2.27, 0.73, 0.37);
+        } else if (n === 1) {
+          const rear = loaderRear(r, base), front = loaderFront(r, base);
+          add(rear, 0, 0.47, -0.64, 1.80, 0.83, 1.29);
+          add(rear, 0, 1.31, -0.39, 1.27, 0.90, 1.18);
+          add(front, 0, 0.48, 0.65, 1.80, 0.86, 1.16);
+          const { pivot, tilt, tool } = scoopPose(n, r, base);
+          for (const side of [-1, 1]) arm(front, loaderLinkage(r, pivot, tilt, side).slice(0, 3), 0.25);
+          scoop(loaderScoop, tool);
+        } else if (n === 2) {
+          add(base, 0, 0.40, 0, 1.94, 0.78, 2.90);
+          add(base, 0, 1.15, 0.96, 1.53, 1.06, 1.04);
+          const bed = truckBed(r, base);
+          add(bed, 0, 0.04, 0.81, 1.55, 0.17, 1.90);
+          for (const s of [-1, 1]) add(bed, s * 0.78, 0.37, 0.81, 0.18, 0.76, 1.90);
+          add(joint(bed, 0, 0.735, -0.10, tailgateAngle(r)), 0, -0.335, 0, 1.54, 0.67, 0.10);
+          add(bed, 0, 0.47, 1.73, 1.60, 0.81, 0.12);
+        } else {
+          add(base, 0, 0.43, 0, 1.83, 0.72, 2.28);
+          const house = excavatorHouse(r, base);
+          add(house, 0, 0.25, -0.27, 1.61, 0.58, 1.64);
+          add(house, -0.42, 0.70, 0.16, 0.79, 0.79, 0.97);
+          const { pivot, tilt, tool } = scoopPose(n, r, base);
+          arm(house, excavatorLinkage(r, pivot, tilt), 0.28);
+          scoop(excavatorScoop, tool);
+        }
+        return parts;
+      }
+      function contactDepth(a, b) {
+        const delta = b.center.map((x, i) => x - a.center[i]),
+          dot = (u, v) => u[0] * v[0] + u[1] * v[1];
+        if (a.h + b.h - Math.abs(delta[1]) <= 0.02) return 0;
+        let depth = Infinity;
+        for (const axis of [a.u, a.v, b.u, b.v]) {
+          const width = (box) => Math.abs(dot(axis, box.u)) * box.w + Math.abs(dot(axis, box.v)) * box.d;
+          depth = Math.min(depth, width(a) + width(b) - Math.abs(dot(axis, [delta[0], delta[2]])));
+          if (depth <= 0) return 0;
+        }
+        return depth;
+      }
+      function blocksRig(n, previous, next) {
+        if (previous.x === next.x && previous.z === next.z && previous.yaw === next.yaw &&
+            previous.steer === next.steer && previous.lift === next.lift && previous.curl === next.curl &&
+            previous.house === next.house && previous.reach === next.reach) return false;
+        const neighbors = rigs.flatMap((o, i) =>
+          i !== n && Math.hypot(next.x - o.x, next.z - o.z) < 7 ? contactParts(i, o) : []);
+        if (!neighbors.length) return false;
+        const before = contactParts(n, previous), after = contactParts(n, next);
+        return neighbors.some((other) => after.some((part, i) => {
+          const depth = contactDepth(part, other);
+          return depth > 0.012 && depth > contactDepth(before[i], other) + 0.0001;
+        }));
       }
       function discharge(n, r, x, z, amount) {
         let q = Math.min(r.payload, Math.max(0, amount));
         if (!q) return 0;
         const truck = rigs[2],
-          bedX = truck.x - 0.35 * Math.sin(truck.yaw),
-          bedZ = truck.z - 0.35 * Math.cos(truck.yaw);
+          dx = x - truck.x,
+          dz = z - truck.z,
+          side = dx * Math.cos(truck.yaw) - dz * Math.sin(truck.yaw),
+          fore = dx * Math.sin(truck.yaw) + dz * Math.cos(truck.yaw),
+          rim = tf(truckBed(truck, rigFrame(truck)), [0, 0.78, clamp(fore + 1.31, 0, 1.7)]);
         if (
-          n !== 2 &&
-          n !== 0 &&
-          Math.hypot(x - bedX, z - bedZ) < 1.45 &&
-          truck.lift < 0.4 &&
-          r.lift > 0.28
+          (n === 1 || n === 3) &&
+          Math.abs(side) < 0.76 && fore > -1.42 && fore < 0.41 &&
+          truck.lift < 0.15 && toolTip(n, r)[1] > rim[1]
         ) {
           q = Math.min(q, truck.capacity - truck.payload);
           if (truck.payload < 0.001) truck.haulDistance = 0;
@@ -1346,44 +1601,44 @@
             feather;
         const accel = c.drive ? 2.4 : 4.3;
         r.speed += clamp(target - r.speed, -dt * accel, dt * accel);
-        r.steer = mix(r.steer, c.turn, Math.min(1, dt * 6));
-        const tracked = n === 0 || n === 3,
-          turnRate = tracked ? 1.25 : Math.abs(r.speed) * 0.6;
-        r.yaw += r.steer * turnRate * dt * (tracked ? 1 : Math.sign(r.speed)) * feather;
-        let nx = clamp(r.x + Math.sin(r.yaw) * r.speed * dt, -W / 2 + 1.5, W / 2 - 1.5),
-          nz = clamp(r.z + Math.cos(r.yaw) * r.speed * dt, -D / 2 + 1.5, D / 2 - 1.5);
-        for (let k = 0; k < 4; k++)
-          if (
-            k !== n &&
-            Math.hypot(nx - rigs[k].x, nz - rigs[k].z) < 1.52 &&
-            Math.hypot(nx - rigs[k].x, nz - rigs[k].z) <
-              Math.hypot(r.x - rigs[k].x, r.z - rigs[k].z)
-          ) {
-            nx = r.x;
-            nz = r.z;
-            r.speed *= 0.55;
-          }
-        const moved = Math.hypot(nx - r.x, nz - r.z);
-        r.x = nx;
-        r.z = nz;
+        const steer = mix(r.steer, c.turn, Math.min(1, dt * 6)),
+          tracked = n === 0 || n === 3,
+          turnRate = tracked ? 1.25 : Math.abs(r.speed) * 0.6,
+          yaw = r.yaw + steer * turnRate * dt * (tracked ? 1 : Math.sign(r.speed)) * feather,
+          nx = clamp(r.x + Math.sin(yaw) * r.speed * dt, -W / 2 + 1.5, W / 2 - 1.5),
+          nz = clamp(r.z + Math.cos(yaw) * r.speed * dt, -D / 2 + 1.5, D / 2 - 1.5);
+        const next = { ...r, x: nx, z: nz, yaw, steer };
+        let moved = 0;
+        if (!blocksRig(n, r, next)) {
+          moved = Math.hypot(nx - r.x, nz - r.z);
+          Object.assign(r, next);
+        } else {
+          r.speed *= 0.55;
+          const turning = { ...r, yaw, steer };
+          if (!blocksRig(n, r, turning)) Object.assign(r, turning);
+        }
         r.travel += moved;
         if (n === 2 && r.payload > 0.01) r.haulDistance += moved;
-        r.lift = clamp(r.lift + c.lift * dt * 0.69 * feather, 0, 1);
+        const tool = { ...r, lift: clamp(r.lift + c.lift * dt * 0.69 * feather, 0, 1) };
         if (n === 3) {
-          r.house += c.side * dt * 1.58 * feather;
-          r.curl = clamp(r.curl + (c.dig - c.dump) * dt * 1.6, 0, 1);
-          r.reach = clamp(r.reach + (c.dump - c.dig) * dt * 0.6, 0, 1);
-        } else r.curl = clamp(r.curl + c.side * dt * 0.88 * feather, 0, 1);
+          tool.house += c.side * dt * 1.58 * feather;
+          tool.curl = clamp(r.curl + (c.dig - c.dump) * dt * 1.6, 0, 1);
+          tool.reach = clamp(r.reach + (c.dump - c.dig) * dt * 0.6, 0, 1);
+        } else if (n === 1) {
+          tool.curl = clamp(r.curl + (c.side * 0.88 + (c.dig - c.dump) * 0.80) * dt * feather, 0, 1);
+        } else tool.curl = clamp(r.curl + c.side * dt * 0.88 * feather, 0, 1);
+        if (c.dig && (n === 1 || n === 3) && tool.lift > 0.025)
+          tool.lift = Math.max(0.025, tool.lift - dt * 0.46 * feather);
+        if (!blocksRig(n, r, tool)) Object.assign(r, tool);
         const [x, z] = toolPoint(n, r);
         let work = 0;
         if (n === 0 && r.speed > 0.015 && r.lift < 0.57) {
-          const cut = 0.55 * (0.57 - r.lift),
-            bladeLevel = r.y + 0.06 - cut;
+          const blade = dozerBlade(r, rigFrame(r));
           for (let lane = -2; lane <= 2; lane++) {
-            const offset = lane * 0.37,
-              px = clamp(x + co * offset, -13.2, 13.2),
-              pz = clamp(z - s * offset, -9.7, 9.7),
-              bite = Math.max(0, sample(h, px, pz) - bladeLevel + (r.curl - 0.5) * offset * 0.55);
+            const [edgeX, edgeY, edgeZ] = tf(blade, [lane * 0.37, 0.045, 0.265]),
+              px = clamp(edgeX, -13.2, 13.2),
+              pz = clamp(edgeZ, -9.7, 9.7),
+              bite = Math.max(0, sample(h, px, pz) - edgeY + 0.36);
             let q = dig(px, pz, 0.36, Math.min(0.28, bite) * moved * 0.45);
             const hold = Math.min(q * 0.22, r.capacity - r.payload);
             r.payload += hold;
@@ -1402,10 +1657,9 @@
           const digging =
             (c.dig ||
               (n === 1 ? c.side > 0 : c.lift < 0) ||
-              (n === 1 && r.speed > 0.1 && r.curl < 0.6)) &&
+              (n === 1 && moved > dt * 0.10 && r.speed > 0 && r.curl < 0.66)) &&
             r.lift < 0.56;
-          const tip = r.y + (n === 1 ? -0.12 + 1.82 * r.lift : -1.51 + 3.95 * r.lift);
-          if (c.dig && r.lift > 0.025) r.lift = Math.max(0.025, r.lift - dt * 0.46 * feather);
+          const tip = toolTip(n, r)[1];
           if (digging && tip < sample(h, x, z) + 0.16) {
             let q = dig(
               x,
@@ -1413,14 +1667,14 @@
               n === 1 ? 0.68 : 0.48,
               Math.min(
                 r.capacity - r.payload,
-                dt * (n === 1 ? 0.42 : 0.35) * (1 - 0.45 * r.lift) * feather,
+                dt * (n === 1 ? 0.42 : 0.65) * (1 - 0.45 * r.lift) * feather,
               ),
-              tip - 0.13,
+              tip - (n === 1 ? 0.13 : 0.19),
             );
             r.payload += q;
             work += q;
           }
-          if (c.dump || (n === 1 && c.side < -0.16 && r.curl < 0.38))
+          if ((n === 3 && c.dump && r.curl < 0.48) || (n === 1 && (c.dump || c.side < -0.16) && r.curl < 0.34))
             work += discharge(n, r, x, z, dt * (0.9 + r.lift) * feather);
         }
         if (n === 2 && r.lift > 0.3) work += discharge(n, r, x, z, dt * 1.65 * (r.lift - 0.3));
@@ -1845,10 +2099,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         material = 0;
       function local(x, y, z, ax, ay, az, doit) {
         let old = matrix;
-        matrix = mm(matrix, trans(x, y, z));
-        if (ay) matrix = mm(matrix, rot(1, ay));
-        if (ax) matrix = mm(matrix, rot(0, ax));
-        if (az) matrix = mm(matrix, rot(2, az));
+        matrix = joint(matrix, x, y, z, ax, ay, az);
         doit();
         matrix = old;
       }
@@ -2558,34 +2809,40 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         rod(a, mid, 0.075, "#585f52");
         rod(mid, b, 0.041, "#d2d5b6");
       }
-      function bucket(x, y, z, w, r, tilt, c) {
-        local(x, y, z, tilt, 0, 0, () => {
-          box(0, 0.04, 0.12, w, 0.1, 0.53, "#9a8770");
-          box(0, 0.27, -0.14, w, 0.52, 0.12, c);
-          for (let s of [-1, 1])
-            face(
-              [
-                [(s * w) / 2, 0.03, -0.18],
-                [(s * w) / 2, 0.03, 0.45],
-                [(s * w) / 2, 0.53, -0.16],
-              ],
-              c,
-            );
-          for (let i = 0; i < 5; i++)
-            box((w * (i - 2)) / 5, 0.005, 0.44, 0.12, 0.075, 0.19, "#acb2a0");
-          if (r.payload > 0.005)
-            blob(
-              0,
-              0.14 + (0.12 * r.payload) / r.capacity,
-              0.08,
-              w * 0.44,
-              (0.26 * r.payload) / r.capacity,
-              0.24,
-              "#c5a16a",
-              0,
-              7,
-            );
-        });
+      function bucket(spec, r, c) {
+        const { width, section, lip } = spec,
+          half = width / 2, shell = 0.055,
+          at = (x, [z, y]) => [x, y, z],
+          inner = section.map(([z, y], i) => [z + (i < 3 ? shell : 0), y + (i > 0 ? shell : 0)]),
+          deck = ["#54594c", "#4b5146", "#606252", "#74705b", "#85816a"],
+          strip = (a, b, x) => [at(-x, a), at(-x, b), at(x, b), at(x, a)];
+        for (let i = 0; i < section.length - 1; i++) {
+          face(strip(section[i], section[i + 1], half).reverse(), i < 2 ? c : "#666759");
+          face(strip(inner[i], inner[i + 1], half - shell), deck[i]);
+        }
+        face(strip(section[0], inner[0], half), c);
+        for (const side of [-1, 1]) {
+          const outer = section.map((p) => at(side * half, p)),
+            inside = inner.map((p) => at(side * (half - shell), p));
+          // The cheek follows the floor and leaves the mouth open between its ends.
+          face(side < 0 ? outer : outer.slice().reverse(), c);
+          face(side > 0 ? inside : inside.slice().reverse(), "#686758");
+          for (let i = 0; i < outer.length; i++) {
+            const j = (i + 1) % outer.length;
+            face([outer[i], outer[j], inside[j], inside[i]], i === outer.length - 1 ? "#b6aa84" : c);
+          }
+          rod([side * (half + 0.012), 0.33, -0.26], [side * (half + 0.012), -0.052, 0.46 * lip[2]], 0.04, c);
+        }
+        const edgeZ = section.at(-1)[0];
+        box(0, -0.067, edgeZ, width + 0.03, 0.077, 0.13, "#9da394");
+        for (let i = -2; i <= 2; i++)
+          box(i * width * 0.187, lip[1] + 0.026, (edgeZ + lip[2]) * 0.5, width * 0.076, 0.065, lip[2] - edgeZ, "#bbc1af");
+        box(0, 0.17, section[1][0] - 0.02, width * 0.54, 0.28, 0.10, "#565c50");
+        if (r.payload > 0.005) {
+          const fill = r.payload / r.capacity, height = 0.035 + 0.23 * fill;
+          blob(0, -0.115 + height * 0.58, 0.22 * lip[2], half * 0.79, height, 0.48 * lip[2],
+            "#c5a16a", 0, 8);
+        }
       }
       function buildRig(n) {
         let r = rigs[n],
@@ -2602,17 +2859,19 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             box(0, 0.96, 0.84, 0.97, 0.36, 0.09, dark);
             for (let i = -3; i <= 3; i++) box(i * 0.118, 0.97, 0.9, 0.046, 0.29, 0.035, "#8d9076");
             cab(0, 1.04, -0.48, 0.92, 0.68, 0.8, p, hi);
-            for (let x of [-0.73, 0.73]) {
+            const bladeJoint = dozerBlade(r, eye4());
+            for (const side of [-1, 1]) {
+              const x = side * 0.73;
               box(x, 0.78, -0.14, 0.31, 0.1, 1.66, hi);
-              stripe(x, 1.0, 0.28, Math.sign(x));
-              piston([x * 0.9, 0.78, 0.05], [x, 0.44 + r.lift * 0.95, 1.29]);
+              stripe(x, 1.0, 0.28, side);
+              piston([x * 0.89, 0.84, 0.57], tf(bladeJoint, [x, 0.41, -0.09]));
+              rod([side * 0.84, 0.46, 0.76], tf(bladeJoint, [side * 0.91, 0.22, -0.085]), 0.086, ac);
             }
             rod([0.39, 1.27, 0.35], [0.39, 1.76, 0.35], 0.068, dark);
             box(0.39, 1.79, 0.32, 0.18, 0.066, 0.18, iron);
             lights(0.45, 1.24, 0.78);
             antenna(-0.49, 1.71, -0.79, r);
             local(0, 0.14 + r.lift * 1.0, 1.42, -0.09, 0, (r.curl - 0.5) * 0.32, () => {
-              for (let s of [-1, 1]) rod([s * 0.67, 0.19, -0.82], [s * 0.82, 0.3, 0], 0.095, ac);
               box(0, 0.37, 0, 2.22, 0.67, 0.18, p);
               box(0, 0.06, 0.13, 2.27, 0.13, 0.27, "#b8ba9f");
               box(0, 0.7, 0.025, 2.22, 0.085, 0.22, hi);
@@ -2633,18 +2892,16 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             local(0, 0, 0.02, 0, r.steer * 0.29, 0, () => {
               for (let x of [-0.7, 0.7]) wheel(x, 0.7, 0.46, r.travel);
               box(0, 0.62, 0.55, 1.12, 0.35, 1.22, p);
-              let y = -0.08 + 1.82 * r.lift,
-                z = 1.58 + 0.08 * Math.sin(r.lift * PI);
-              for (let s of [-1, 1]) {
-                const a = [s * 0.49, 0.96, 0.22],
-                  k = [s * 0.49, 1.01 + r.lift * 0.77, 1.07],
-                  b = [s * 0.48, y + 0.25, z];
-                beam(a, k, 0.14, 0.125, hi, 5);
-                beam(k, b, 0.13, 0.1, p, 5);
-                piston([s * 0.49, 0.66, 0.53], k);
-                rod([s * 0.31, 0.94, 0.71], [s * 0.31, y + 0.42, z], 0.053, dark);
+              const { pivot, tilt } = scoopPose(n, r);
+              for (const s of [-1, 1]) {
+                const [a, k, b, link] = loaderLinkage(r, pivot, tilt, s);
+                beam(a, k, 0.15, 0.13, hi, 5);
+                beam(k, b, 0.14, 0.11, p, 5);
+                piston([s * 0.48, 0.69, 0.62], k);
+                rod([s * 0.31, 1.04 + r.lift * 0.46, 0.91], link, 0.056, dark);
+                rod([s * 0.54, b[1], b[2]], [s * 0.42, b[1], b[2]], 0.09, iron);
               }
-              bucket(0, y, z, 1.58, r, (r.curl - 0.53) * 1.4, p);
+              local(...pivot, tilt, 0, 0, () => bucket(loaderScoop, r, p));
               lights(0.48, 1.07, 0.78);
             });
           }
@@ -2660,23 +2917,26 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             for (let j = -2; j <= 2; j++) box(j * 0.1, 0.91, 1.425, 0.035, 0.2, 0.03, iron);
             antenna(-0.61, 1.58, 0.66, r);
             local(0, 0.77, -1.31, -r.lift * 1.12, 0, 0, () => {
-              box(0, 0.04, 0.91, 1.55, 0.17, 2.05, "#a47b49");
+              box(0, 0.04, 0.81, 1.55, 0.17, 1.90, "#a47b49");
               for (let s of [-1, 1]) {
-                box(s * 0.77, 0.36, 0.9, 0.12, 0.64, 2.06, p);
-                box(s * 0.78, 0.7, 0.9, 0.16, 0.11, 2.08, hi);
+                box(s * 0.77, 0.36, 0.81, 0.12, 0.64, 1.90, p);
+                box(s * 0.78, 0.7, 0.81, 0.16, 0.11, 1.91, hi);
                 for (let j = 0; j < 5; j++)
-                  box(s * 0.846, 0.37, 0.03 + j * 0.43, 0.06, 0.57, 0.075, ac);
+                  box(s * 0.846, 0.37, 0.03 + j * 0.40, 0.06, 0.57, 0.075, ac);
               }
-              box(0, 0.4, -0.1, 1.54, 0.67, 0.1, hi);
-              box(0, 0.47, 1.87, 1.6, 0.81, 0.12, p);
+              local(0, 0.735, -0.10, tailgateAngle(r), 0, 0, () => {
+                box(0, -0.335, 0, 1.54, 0.67, 0.10, hi);
+                box(0, -0.50, -0.056, 1.43, 0.065, 0.018, ac);
+              });
+              box(0, 0.47, 1.73, 1.6, 0.81, 0.12, p);
               if (r.payload > 0.006)
                 blob(
                   0,
                   0.19 + (0.19 * r.payload) / r.capacity,
-                  0.87,
-                  0.7,
+                  0.78 - 0.28 * r.lift,
+                  0.63,
                   (0.42 * r.payload) / r.capacity,
-                  0.93,
+                  0.75 - 0.15 * r.lift,
                   "#c7a46a",
                   0.3,
                 );
@@ -2696,13 +2956,8 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
               cab(-0.42, 0.33, 0.16, 0.72, 0.72, 0.87, p, hi);
               stripe(0.8, 0.2, -0.55, 1);
               antenna(0.63, 0.62, -0.73, r);
-              const a = [0.29, 0.4, 0.48],
-                k = [0.29, 1.54 + r.lift * 1.45, 1.04 + r.reach * 0.43],
-                b = [
-                  0.29,
-                  Math.max(-2.32 + r.lift * 3.95, sample(h, ...toolPoint(3, r)) - r.y - 0.92),
-                  2.02 + r.reach * 1.0,
-                ];
+              const { pivot, tilt } = scoopPose(n, r),
+                [a, k, b] = excavatorLinkage(r, pivot, tilt);
               beam(a, k, 0.19, 0.13, p, 5);
               beam(k, b, 0.135, 0.093, hi, 5);
               piston([0.28, 0.5, 0.62], [0.28, k[1] - 0.12, k[2] - 0.1]);
@@ -2716,7 +2971,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
                   iron,
                   7,
                 );
-              bucket(...b, 0.72, r, (r.curl - 0.5) * 1.6, "#7e785f");
+              local(...pivot, tilt, 0, 0, () => bucket(excavatorScoop, r, "#a79052"));
               lights(0.55, 0.46, 0.56);
             });
           }
@@ -4433,6 +4688,20 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             r.speed = 0;
           },
           point: toolPoint,
+          tip: toolTip,
+          scoop(n) {
+            const { tool } = scoopPose(n, rigs[n]);
+            const { width, section, lip } = n === 1 ? loaderScoop : excavatorScoop;
+            return {
+              lip: tf(tool, lip),
+              profile: section.map(([z, y]) => tf(tool, [0, y, z])),
+              edges: [-1, 1].map((s) => tf(tool, [s * width / 2, lip[1], lip[2]])),
+            };
+          },
+          contact(n, k) {
+            const other = contactParts(k, rigs[k]);
+            return Math.max(0, ...contactParts(n, rigs[n]).flatMap((a) => other.map((b) => contactDepth(a, b))));
+          },
           depth: (x, z) => sample(water, x, z),
           height: (x, z) => sample(h, x, z),
           ray: (x, y, z) => project(x, y, z),

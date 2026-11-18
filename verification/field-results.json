@@ -1,0 +1,247 @@
+{
+  "reports": [
+    {
+      "name": "dozer",
+      "ticks": 46,
+      "sandError": -3.410605131648481e-13,
+      "waterError": 3.6741443221188774e-14,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 3.3916478013401847,
+      "payload": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "loader digging",
+      "ticks": 94,
+      "sandError": -9.094947017729282e-13,
+      "waterError": -1.4037382367604323e-14,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 7.822117216793558,
+      "payload": [
+        0,
+        4.430469415453374,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "loader to truck",
+      "ticks": 123,
+      "sandError": -9.094947017729282e-13,
+      "waterError": -5.8581611783736776e-15,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 12.232117216793563,
+      "payload": [
+        0,
+        0.020469415453374884,
+        4.41,
+        0
+      ]
+    },
+    {
+      "name": "truck unloading",
+      "ticks": 182,
+      "sandError": 0,
+      "waterError": 3.6914915568786455e-15,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0.09435555555555544,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 14.142817216793562,
+      "payload": [
+        0,
+        0.020469415453374884,
+        2.4993000000000025,
+        0
+      ]
+    },
+    {
+      "name": "excavator cut",
+      "ticks": 207,
+      "sandError": -1.3642420526593924e-12,
+      "waterError": 1.987993103469421e-14,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 21.142817216793556,
+      "payload": [
+        0,
+        0.020469415453374884,
+        0,
+        7
+      ]
+    },
+    {
+      "name": "levee",
+      "ticks": 720,
+      "sandError": 7.958078640513122e-13,
+      "waterError": -2.6104118866498993e-13,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 0,
+      "payload": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "natural levee breach",
+      "ticks": 1380,
+      "sandError": -1.2505552149377763e-12,
+      "waterError": 1.244004899092488e-13,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 1,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 0,
+      "payload": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "180 seconds randomized gamepad and rain",
+      "ticks": 5400,
+      "sandError": -1.2505552149377763e-12,
+      "waterError": 5.5990767577895895e-11,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 1.782798422118078,
+      "basins": [
+        1,
+        1
+      ],
+      "worked": 95.91397369581505,
+      "payload": [
+        0,
+        7.0614221694451125,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "multitouch",
+      "ticks": 30,
+      "sandError": -4.547473508864641e-13,
+      "waterError": 8.74430736153009e-15,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0,
+        0
+      ],
+      "worked": 4.610219135765111,
+      "payload": [
+        0,
+        0,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "two-basin diversion",
+      "ticks": 5160,
+      "sandError": 1.8189894035458565e-12,
+      "waterError": -1.5085710458606627e-12,
+      "finite": true,
+      "glError": 0,
+      "airborneSand": 0,
+      "breaches": 0,
+      "campDepth": 0,
+      "basins": [
+        0.933557474205561,
+        1
+      ],
+      "worked": 0,
+      "payload": [
+        0,
+        0,
+        0,
+        0
+      ]
+    }
+  ],
+  "proof": {
+    "simulatedSeconds": 180,
+    "units": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "maxError": 1.8189894035458565e-12
+  },
+  "errors": [],
+  "touch": {
+    "drive": 0.7598784194528876,
+    "steer": 0,
+    "hy": -0.6079027355623101,
+    "hx": 0.25329280648429586,
+    "reach": 0,
+    "curl": 0
+  },
+  "earthworks": {
+    "excavatedLitres": 38.57580746183034,
+    "bermLitres": 25.07427485018972
+  }
+}

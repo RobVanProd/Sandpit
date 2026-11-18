@@ -1,0 +1,50 @@
+name: Check public Pages
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    paths: ['.github/workflows/pages-check.yml']
+  push:
+    branches: [main]
+    paths: ['index.html', 'field/index.html', '.nojekyll', '.github/workflows/pages-check.yml']
+permissions:
+  contents: read
+  pages: read
+  actions: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Inspect Pages source and recent builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pages" --jq '{html_url,source,build_type,status,https_enforced,cname}' || true
+          gh api "repos/$GITHUB_REPOSITORY/git/commits/$(git rev-parse HEAD)" --jq '.tree.sha'
+          git ls-tree --name-only HEAD
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs?per_page=18" --jq '.workflow_runs[] | select(.name|test("pages";"i")) | [.name,.id,.status,.conclusion,.head_sha] | @tsv' || true
+      - name: Load the public project URL
+        env:
+          EVENT: ${{ github.event_name }}
+          MERGED: ${{ github.event.pull_request.merged }}
+        run: |
+          url="https://robvanprod.github.io/Sandpit/"
+          tries=1
+          if [ "$EVENT" = push ] || [ "$MERGED" = true ]; then tries=40; fi
+          for attempt in $(seq 1 "$tries"); do
+            status=$(curl -LsS --retry 2 --max-time 20 -w '%{http_code}' -o /tmp/entry "${url}?verify=${GITHUB_SHA}-${attempt}")
+            echo "Root HTTP $status, published blob $(git hash-object /tmp/entry), wanted $(git hash-object index.html)"
+            if [ "$status" = 200 ]; then
+              if [ "$EVENT" = pull_request ] && [ "$MERGED" != true ]; then exit 0; fi
+              if cmp -s index.html /tmp/entry; then
+                if [ -f field/index.html ]; then
+                  field_status=$(curl -LsS --max-time 20 -w '%{http_code}' -o /tmp/field "${url}field/?verify=$GITHUB_SHA-$attempt")
+                  echo "Field HTTP $field_status, published blob $(git hash-object /tmp/field), wanted $(git hash-object field/index.html)"
+                  if [ "$field_status" = 200 ] && cmp -s field/index.html /tmp/field; then exit 0; fi
+                else exit 0; fi
+              fi
+            fi
+            if [ "$attempt" != "$tries" ]; then sleep 10; fi
+          done
+          exit 1
