@@ -17,6 +17,20 @@ const soil = new Function('matchMedia', engine + `
     initYard, at, sample, avalanche, exchangeSediment, wetSand,
     sandTotal, waterBalanceError, waterTotal,
     h, w, silt, pack, fresh, pore, poreCapacity, NX, NZ, DX, HX, HZ,
+    flatSand() {
+      initYard(2);
+      h.fill(0);
+      w.fill(0);
+      wet.fill(0);
+      pore.fill(0);
+      // Homogeneous quartz above a flat, buried bedrock surface.
+      for (let i = 0; i < N; i++) {
+        groundBed[i] = floor;
+        bankTop[i] = gravelBase[i] = gravelTop[i] = floor;
+        gravelShare[i] = 0;
+        refreshGround(i);
+      }
+    },
     startWaterTest() {
       w.fill(0);
       pore.fill(0);
@@ -35,7 +49,7 @@ const soil = new Function('matchMedia', engine + `
 `)(() => ({ matches: false }));
 
 const {
-  initYard, at, sample, avalanche, exchangeSediment, wetSand,
+  flatSand, at, sample, avalanche, exchangeSediment, wetSand,
   sandTotal, waterBalanceError, waterTotal,
   h, w, silt, pack, fresh, pore, poreCapacity, NX, NZ, DX, HX, HZ,
   startWaterTest, addSurfaceWater, drainSurfaceWater,
@@ -43,8 +57,7 @@ const {
 const step = 1 / 30;
 
 function pileProfile(saturation, dt = step) {
-  initYard(2);
-  w.fill(0);
+  flatSand();
   pore.fill(poreCapacity * saturation);
   for (let z = 0; z < NZ; z++) {
     for (let x = 0; x < NX; x++) {
@@ -81,7 +94,7 @@ const maxStepDifference = Math.max(...damp24.map((angle, i) => Math.abs(angle - 
 assert.ok(maxStepDifference < 1, 'Repose is comparable at 24 and 30 Hz');
 
 function erosion(depth, speed, compaction) {
-  initYard(2);
+  flatSand();
   const i = at(0, 0);
   h[i] = 0;
   silt[i] = 0;
@@ -104,7 +117,7 @@ assert.ok(shallow.pickedUp < 0.1 * loose.pickedUp, 'A thin film carries less san
 assert.ok(deeper.afterSettling / deeper.pickedUp > loose.afterSettling / loose.pickedUp,
   'Sand takes longer to settle through deep water');
 
-initYard(2);
+flatSand();
 startWaterTest();
 const center = at(0, 0);
 addSurfaceWater(center, 0.65);

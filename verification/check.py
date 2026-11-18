@@ -171,8 +171,7 @@ def scenario_checks(p):
         }
         c(46,{dig:1});
       }
-      for (const [offset,along] of [[-.62,0],[0,0],[.62,0],[-.62,0],[0,0],[.62,0],[-.62,0],[0,0],[.62,0],
-          [2.9,1.5],[3.5,1.45],[4.1,1.4],[4.7,1.35],[2.9,2.1],[3.5,2.05],[4.1,2],[4.7,1.95]]) {
+      for (const [offset,along] of [[2.9,1.5],[3.5,1.45],[4.1,1.4],[4.7,1.35],[2.9,2.1],[3.5,2.05],[4.1,2],[4.7,1.95]]) {
         excavate(offset,along);
         const scooped=r.payload;
         c(44,{side:along ? -.64 : .64,lift:1});
@@ -196,7 +195,7 @@ def scenario_checks(p):
       }
       c(112,{lift:1});
       t.select(3);
-      for(const offset of [-.62,.62,0,-.62,.62,0]){
+      for(const offset of [-.62,.62,0,-.62,.62,0,-.62,.62,0,-.62,.62,0]){
         if(t.state.won)break;
         excavate(offset);
         c(39,{side:-1,lift:1});

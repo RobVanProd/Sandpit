@@ -26,6 +26,9 @@ jobs:
         run: |
           node verification/contact.cjs
           node verification/soil.cjs
+          node verification/material.cjs
+          node verification/field-grains.cjs
+          node verification/earthwork-grains.cjs
           python verification/check.py
           node verification/field.cjs
       - uses: actions/upload-artifact@v4
