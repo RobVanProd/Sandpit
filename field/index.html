@@ -1121,25 +1121,54 @@ function program(vs,fs){let p=gl.createProgram();for(const [type,src] of [[gl.VE
 const vertex=`#version 300 es
 precision highp float;
 layout(location=0) in vec3 pos;layout(location=1) in vec3 normal;layout(location=2) in vec3 color;layout(location=3) in float material;
-uniform mat4 vp,lightVP,model;uniform int mode;uniform sampler2D field;out vec3 P,N,C;flat out float M;out vec4 shadowPos;
+uniform mat4 vp,lightVP,model;uniform int mode;uniform highp sampler2D field;out vec3 P,N,C;flat out float M;out vec4 shadowPos;
 vec2 uv(vec2 p){return (p/0.2222222222+vec2(72.,48.)+.5)/vec2(145.,97.);}
 float elevation(ivec2 ij){vec4 v=texelFetch(field,clamp(ij,ivec2(0),ivec2(144,96)),0);return v.r+(mode==2?v.g:0.);}
 void main(){P=(model*vec4(pos,1)).xyz;C=color;N=mat3(model)*normal;M=material;if(mode>0){vec4 a=texture(field,uv(pos.xz));P.y=a.r+(mode==2?a.g+.009:0.);ivec2 ij=ivec2(floor(uv(pos.xz)*vec2(145,97)));N=normalize(vec3(elevation(ij-ivec2(1,0))-elevation(ij+ivec2(1,0)),.444444,elevation(ij-ivec2(0,1))-elevation(ij+ivec2(0,1))));}shadowPos=lightVP*vec4(P,1);gl_Position=vp*vec4(P,1);}`;
 const frag=`#version 300 es
 precision highp float;precision highp int;
 in vec3 P,N,C;flat in float M;in vec4 shadowPos;layout(location=0)out vec4 col;layout(location=1)out vec4 edge;
-uniform int mode,pass;uniform vec3 eye;uniform float t;uniform sampler2D field,detail,soil,geology,shadowMap;uniform vec4 lamps[8];
+uniform int mode;uniform vec3 eye;uniform float t;uniform highp sampler2D field,detail;uniform sampler2D soil,geology;uniform highp sampler2D shadowMap;uniform vec4 lamps[8];
 const vec3 sun=vec3(-.68,.56,-.47);
 float bayer(){int a[16]=int[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);return float(a[(int(gl_FragCoord.x)&3)+(int(gl_FragCoord.y)&3)*4])/16.;}
 float hash(vec2 p){vec3 q=fract(vec3(p.xyx)*vec3(.1031,.1030,.0973));q+=dot(q,q.yzx+33.33);return fract((q.x+q.y)*q.z);}
 float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
 float quant(float x,float levels,float b){return floor(x*levels+b)/levels;}
 vec2 uv(vec2 p){return (p/.2222222222+vec2(72.,48.)+.5)/vec2(145.,97.);}
-vec4 data(vec2 u,sampler2D tex){vec2 g=u*vec2(145,97)-.5;ivec2 i=ivec2(floor(g));vec2 f=fract(g);ivec2 hi=ivec2(144,96);return mix(mix(texelFetch(tex,clamp(i,ivec2(0),hi),0),texelFetch(tex,clamp(i+ivec2(1,0),ivec2(0),hi),0),f.x),mix(texelFetch(tex,clamp(i+ivec2(0,1),ivec2(0),hi),0),texelFetch(tex,clamp(i+ivec2(1),ivec2(0),hi),0),f.x),f.y);}
-float shade(vec3 n){vec3 sc=shadowPos.xyz/shadowPos.w*.5+.5;if(any(lessThan(sc,vec3(.001)))||any(greaterThan(sc,vec3(.999))))return 1.;float cosine=clamp(dot(n,sun),.08,1.);float bias=.00024+.00044*min(7.,sqrt(1.-cosine*cosine)/cosine);return sc.z-bias>texture(shadowMap,sc.xy).r?.43:1.;}
-void main(){if(pass==1){col=vec4(1);edge=vec4(0);return;}
-float b=bayer();vec3 n=normalize(N),rgb=C;vec2 p=P.xz;vec2 u=uv(p);float grain=hash(floor(p*17.7)),m=noise(p*.62),dots=noise(p*2.2);float strength=0.;float shadow=1.;
-if(mode>0){vec4 a=data(u,field);vec4 d=data(u,detail);vec2 grains=texture(soil,u).rg;n=normalize(N);shadow=shade(n);
+vec4 data(vec2 u,highp sampler2D tex){vec2 g=u*vec2(145,97)-.5;ivec2 i=ivec2(floor(g));vec2 f=fract(g);ivec2 hi=ivec2(144,96);return mix(mix(texelFetch(tex,clamp(i,ivec2(0),hi),0),texelFetch(tex,clamp(i+ivec2(1,0),ivec2(0),hi),0),f.x),mix(texelFetch(tex,clamp(i+ivec2(0,1),ivec2(0),hi),0),texelFetch(tex,clamp(i+ivec2(1),ivec2(0),hi),0),f.x),f.y);}
+float shadowTap(ivec2 texel, ivec2 size, float receiverDepth) {
+  if (any(lessThan(texel, ivec2(0))) || any(greaterThanEqual(texel, size))) return 1.;
+  return step(receiverDepth, texelFetch(shadowMap, texel, 0).r);
+}
+float shadowVisibility(vec4 clip, float terrainRoughness) {
+  vec3 sc = clip.xyz / clip.w * .5 + .5;
+  ivec2 size = textureSize(shadowMap, 0);
+  vec2 texelPosition = sc.xy * vec2(size) - .5;
+
+  // Fit the actual receiver triangle in light space, with XY in shadow texels.
+  vec3 receiver = vec3(texelPosition, sc.z);
+  vec3 plane = cross(dFdx(receiver), dFdy(receiver));
+  if (any(lessThan(sc, vec3(0.))) || any(greaterThanEqual(sc, vec3(1.)))) return 1.;
+  float safeZ = sign(plane.z) * max(abs(plane.z), 1e-7);
+  vec2 slope = vec2(0.);
+  if (safeZ != 0.) slope = clamp(-plane.xy / safeZ, vec2(-.008), vec2(.008));
+
+  // Compare each tap against the plane at that texel's center. Blending
+  // coverage across just the four adjacent texels keeps the contact edge sharp.
+  ivec2 corner = ivec2(floor(texelPosition));
+  vec2 f = fract(texelPosition);
+  // A terrain tap can land across a crease onto a different receiver plane.
+  float bias = (.04 + .72 * terrainRoughness) / float(size.x);
+  float depth = sc.z - dot(slope, f) - max(.000015, bias);
+  float top = mix(shadowTap(corner, size, depth),
+                  shadowTap(corner + ivec2(1, 0), size, depth + slope.x), f.x);
+  float bottom = mix(shadowTap(corner + ivec2(0, 1), size, depth + slope.y),
+                     shadowTap(corner + ivec2(1, 1), size, depth + slope.x + slope.y), f.x);
+  return mix(top, bottom, f.y);
+}
+void main(){
+float b=bayer();vec3 n=normalize(N),rgb=C;vec2 p=P.xz;vec2 u=uv(p);float grain=hash(floor(p*17.7)),m=noise(p*.62),dots=noise(p*2.2);float strength=0.;float shadow=mix(.43,1.,shadowVisibility(shadowPos,mode==1?smoothstep(.015,.35,1.-n.y):0.));
+if(mode>0){vec4 a=data(u,field);vec4 d=data(u,detail);vec2 grains=texture(soil,u).rg;n=normalize(N);
 if(mode==1){vec3 strata=texture(geology,u).rgb;float moisture=quant(clamp(a.b*.88+a.g*.65,0.,1.),6.,b);float bed=quant(clamp(.17+P.y*.17+m*.29,0.,1.),6.,b);
 vec3 dry=mix(vec3(.77,.552,.317),vec3(1.,.868,.596),bed);rgb=mix(dry,vec3(.475,.369,.238),moisture*.87);
 float slope=1.-n.y,cut=smoothstep(.12,.54,slope);
@@ -1185,7 +1214,7 @@ float fres=pow(1.-clamp(dot(normalize(eye-P),n),0.,1.),2.);
 rgb+=vec3(.11,.16,.13)*quant(fres,4.,b)+vec3(.8,.85,.61)*ripple;rgb=mix(rgb,vec3(.81,.85,.64),glint*(.58+.31*fres));
 float froth=max(d.b,(1.-smoothstep(.025,.12,a.g))*.25);if((froth>.09&&grain>1.-froth*.27&&wave>.17)||(a.g<.057&&wave>.20&&dots>.51))rgb=vec3(.86,.87,.67);
 rgb*=mix(.78,1.,shadow);}}
-else{shadow=shade(n);
+else{
 if(M>1.5&&M<2.5){vec2 wood=abs(n.z)>.6?vec2(P.x,P.y):abs(n.x)>.6?vec2(P.z,P.y):(abs(abs(P.x)-16.24)<abs(abs(P.z)-10.91)?vec2(P.z,P.x):vec2(P.x,P.z));float grainline=noise(vec2(wood.x*.94,wood.y*16.));float ring=sin(wood.y*48.+noise(wood*vec2(.24,6.))*7.);rgb*=.88+.18*step(.42,grainline)+.10*step(.77,ring)-.13*step(.82,grainline);}
 if(M>2.5&&M<3.5){float blades=hash(floor(p*9.));rgb=mix(vec3(.34,.393,.199),vec3(.55,.57,.274),quant(clamp(.26+.37*noise(p*.27)+.23*m+.14*step(.78,blades),0.,1.),6.,b));rgb+=(blades>.92?.045:blades<.08?-.033:0.);rgb*=.96+.10*noise(p*.15);}
 if(M>3.5&&M<4.5){vec2 tiles=p*vec2(.45,.65);tiles.x+=mod(floor(tiles.y),2.)*.5;vec2 f=fract(tiles);rgb*=.88+hash(floor(tiles))*.15;rgb*=min(min(f.x,1.-f.x),min(f.y,1.-f.y))<.022?.64:1.;rgb+=(grain-.5)*.06;}
@@ -1201,6 +1230,8 @@ strength=(M<1.5?1.:0.);}
 rgb=floor(clamp(rgb,0.,1.)*64.+b)/64.;col=vec4(rgb,1);edge=vec4(n*.5+.5,strength>.5?clamp(.98-length(P-eye)*.009,.05,.99):0.);}
 `;
 const sceneP=program(vertex,frag);
+const shadowP=program(vertex,`#version 300 es
+void main(){}`);
 const screenV=`#version 300 es
 out vec2 uv;void main(){vec2 p=vec2((gl_VertexID<<1)&2,gl_VertexID&2);uv=p;gl_Position=vec4(p*2.-1.,0,1);}`;
 const finishP=program(screenV,`#version 300 es
@@ -1208,7 +1239,8 @@ precision highp float;uniform sampler2D image,edges;in vec2 uv;out vec4 outColor
 ivec2 off[3]=ivec2[3](ivec2(0,1),ivec2(-1,0),ivec2(1,0));float ink=0.;for(int i=0;i<3;i++){vec4 q=texelFetch(edges,clamp(p+off[i],ivec2(0),mx),0);if(q.a>0.&&q.a>e.a+.023)ink=max(ink,.77);if(q.a*e.a>0.&&distance(q.rgb,e.rgb)>.70)ink=max(ink,.36);}outColor=vec4(mix(c,vec3(.17,.159,.123),ink),1.);}`);
 const skyP=program(screenV,`#version 300 es
 precision highp float;in vec2 uv;out vec4 c;void main(){float a=uv.y*7.;float q=floor(a+mod(floor(gl_FragCoord.x)+floor(gl_FragCoord.y)*2.,4.)*.25)/7.;vec3 sky=mix(vec3(1.,.86,.62),vec3(.58,.72,.67),q);float bars=sin(uv.y*76.+sin(uv.x*13.)*.9+sin(uv.x*37.)*.28);if(bars>.77&&sin(uv.x*14.+uv.y*25.)>.15&&uv.y>.35)sky=mix(sky,vec3(.99,.88,.68),.33);c=vec4(sky,1);}`);
-function loc(p,n){return gl.getUniformLocation(p,n)}const U={};for(const n of ['vp','lightVP','model','mode','field','detail','soil','geology','shadowMap','eye','t','pass','lamps'])U[n]=loc(sceneP,n);
+function loc(p,n){return gl.getUniformLocation(p,n)}const U={};for(const n of ['vp','lightVP','model','mode','field','detail','soil','geology','shadowMap','eye','t','lamps'])U[n]=loc(sceneP,n);
+const shadowU=Object.fromEntries(['vp','model','mode','field'].map(n=>[n,loc(shadowP,n)]));
 function texture(internal,w,h,fmt,type){let tx=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,tx);gl.texImage2D(gl.TEXTURE_2D,0,internal,w,h,0,fmt,type,null);for(const a of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,a,gl.NEAREST);for(const a of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,a,gl.CLAMP_TO_EDGE);return tx}
 const fieldTex=texture(gl.RGBA32F,NX,NZ,gl.RGBA,gl.FLOAT),detailT=texture(gl.RGBA32F,NX,NZ,gl.RGBA,gl.FLOAT);
 const soilPixels=new Uint8Array(N*2),soilTex=texture(gl.RG8,NX,NZ,gl.RG,gl.UNSIGNED_BYTE);
@@ -1253,7 +1285,20 @@ const rgbCache=new Map();function color(s){if(rgbCache.has(s))return rgbCache.ge
 function face(points,col,mat=1){let p=points.map(x=>pt(T,x)),n=unit(cross(sub(p[1],p[0]),sub(p[2],p[0]))),c=typeof col==='string'?color(col):col;for(let i=1;i<p.length-1;i++)for(let a of [p[0],p[i],p[i+1]])data.push(...a,...n,...c,mat)}
 function box(x,y,z,sx,sy,sz,col,mat=1){let a=sx/2,b=sy/2,c=sz/2,p=[[x-a,y-b,z-c],[x+a,y-b,z-c],[x+a,y+b,z-c],[x-a,y+b,z-c],[x-a,y-b,z+c],[x+a,y-b,z+c],[x+a,y+b,z+c],[x-a,y+b,z+c]];for(let o of [[0,3,2,1],[4,5,6,7],[0,4,7,3],[1,2,6,5],[3,7,6,2],[0,1,5,4]])face(o.map(i=>p[i]),col,mat)}
 function cyl(a,b,r,r2,col,n=8,mat=1){let axis=unit(sub(b,a)),u=unit(cross(axis,Math.abs(axis[1])>.91?[1,0,0]:[0,1,0])),v=cross(axis,u),lo=[],hi=[];for(let k=0;k<n;k++){let dir=add(mul(u,Math.cos(k*TAU/n)),mul(v,Math.sin(k*TAU/n)));lo.push(add(a,mul(dir,r)));hi.push(add(b,mul(dir,r2)))}for(let k=0;k<n;k++){let j=(k+1)%n;face([lo[k],lo[j],hi[j],hi[k]],col,mat)}face(lo.reverse(),col,mat);face(hi,col,mat)}
-function prism(x,width,profile,col,mat=1){let l=profile.map(([z,y])=>[x-width/2,y,z]),r=profile.map(([z,y])=>[x+width/2,y,z]);let n=cross(sub(l[1],l[0]),sub(l[2],l[0]));if(n[0]>0){l.reverse();r.reverse()}face(l,col,mat);face(r.slice().reverse(),col,mat);for(let i=0;i<l.length;i++){let j=(i+1)%l.length;face([l[j],l[i],r[i],r[j]],col,mat)}}
+function prism(x,width,profile,col,mat=1,capTriangles){
+ let l=profile.map(([z,y])=>[x-width/2,y,z]),r=profile.map(([z,y])=>[x+width/2,y,z]);
+ const reverse=cross(sub(l[1],l[0]),sub(l[2],l[0]))[0]>0;
+ if(capTriangles){
+  for(const [a,b,c] of capTriangles){
+   const winding=reverse?[c,b,a]:[a,b,c];
+   face(winding.map(i=>l[i]),col,mat);
+   face(winding.reverse().map(i=>r[i]),col,mat);
+  }
+ }
+ if(reverse){l.reverse();r.reverse()}
+ if(!capTriangles){face(l,col,mat);face(r.slice().reverse(),col,mat)}
+ for(let i=0;i<l.length;i++){let j=(i+1)%l.length;face([l[j],l[i],r[i],r[j]],col,mat)}
+}
 function mesh(arr,index){let vao=gl.createVertexArray(),buf=gl.createBuffer();gl.bindVertexArray(vao);gl.bindBuffer(gl.ARRAY_BUFFER,buf);gl.bufferData(gl.ARRAY_BUFFER,new Float32Array(arr),gl.STATIC_DRAW);for(let [i,j,n] of [[0,0,3],[1,3,3],[2,6,3],[3,9,1]]){gl.enableVertexAttribArray(i);gl.vertexAttribPointer(i,n,gl.FLOAT,false,40,j*4)}let idx=null;if(index){idx=gl.createBuffer();gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idx);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,new Uint16Array(index),gl.STATIC_DRAW)}gl.bindVertexArray(null);return {vao,buf,idx,count:index?index.length:arr.length/10,index:!!index}}
 function bake(fn){data=[];T=I;fn();return mesh(data)}
 let gv=[],gi=[];for(let j=0;j<NZ;j++)for(let x=0;x<NX;x++){let i=j*NX+x;gv.push(x*DX-HX,0,j*DX-HZ,0,1,0,1,1,1,0);if(j<NZ-1&&x<NX-1)gi.push(i,i+NX,i+1,i+1,i+NX,i+NX+1)}const grid=mesh(gv,gi);gv=gi=null;
@@ -1286,7 +1331,9 @@ bake(()=>{box(0,.75,-.62,1.62,.50,1.67,orange);box(0,.98,-1.57,1.46,.40,.12,fram
 bake(()=>{box(0,.69,-.06,1.73,.31,3.49,dark);box(0,1.07,1.12,1.92,.5,1.02,sage);cab(0,1.30,1.10,1.59,.83,.93,sage);box(0,.76,1.77,2.06,.22,.22,metal);box(0,1.11,1.655,.84,.28,.07,frame);lampPair(.77,1.18,1.656);for(let s of [-1,1]){box(s*.96,.98,1.22,.45,.14,1.26,sage);box(s*1.02,.76,.61,.27,.12,.52,metal);badge(s*.98,1.16,1.02,s)}exhaust(1.08,1.14,.76,.94)}),
 bake(()=>{for(let s of [-1,1])track(s*.79,0,2.58);box(0,.89,0,1.58,.27,1.74,metal);cyl([0,1.00,0],[0,1.19,0],.73,.7,dark,12)})];
 const blade=bake(()=>{
-  prism(0,2.88,[[-.25,-.36],[.21,-.40],[.01,-.21],[-.08,.28],[.01,.46],[-.18,.48],[-.29,.27]],'#ab8b55');
+  // The curved profile is concave. These triangles tile each end without overlap.
+  prism(0,2.88,[[-.25,-.36],[.21,-.40],[.01,-.21],[-.08,.28],[.01,.46],[-.18,.48],[-.29,.27]],'#ab8b55',1,
+   [[0,1,2],[0,2,3],[0,3,6],[3,4,5],[3,5,6]]);
   box(0,-.36,.12,2.98,.15,.16,bright);
   box(0,.43,-.12,2.84,.09,.13,'#c3a05b');
   for(let s of [-1,1]){
@@ -1679,13 +1726,21 @@ function particlesStep(dt){let v=vehicles[active];if(v.work>.02&&time-lastPartic
 function waterDetails(){let x=source[0],z=source[1],bottom=sample(h,x,z)+sample(w,x,z),ht=2.03-bottom;if(flow>.003){let thick=.08+.14*Math.sqrt(flow);
  sceneItems.push([droplet,matmul(pose(x,(2.03+bottom)*.5,z-.035),scaled(thick,ht,thick))]);for(let k=0;k<6;k++){let f=(time*1.8+k/6)%1,a=k*2.39+Math.floor(time*1.8+k/6)*2.01;sceneItems.push([droplet,matmul(pose(x+Math.sin(a)*f*.54,bottom+.04+Math.sin(f*PI)*.22,z+Math.cos(a)*f*.48),scaled(.075,.08,.085))])}}
  if(rain)for(let k=0;k<85;k++){let x=((k*17.31+time*.8)%33)-16.5,z=((k*8.57)%22)-11,y=8-((time*7+k*2.56)%8);if(y>sample(h,x,z))sceneItems.push([droplet,matmul(pose(x,y,z,0,0,.18),scaled(.024,.24,.028))])}}
-function draw(g,m=I){gl.uniformMatrix4fv(U.model,false,m);gl.bindVertexArray(g.vao);if(g.index)gl.drawElements(gl.TRIANGLES,g.count,gl.UNSIGNED_SHORT,0);else gl.drawArrays(gl.TRIANGLES,0,g.count)}
-function objects(includeWater){gl.uniform1i(U.mode,1);draw(grid);gl.uniform1i(U.mode,0);draw(environment);for(let [g,m] of sceneItems)draw(g,m);if(movingSoil.count)draw(movingSoil);if(includeWater){gl.uniform1i(U.mode,2);draw(grid)}}
-let shadowTick=0;
+function draw(g,m,uniforms){gl.uniformMatrix4fv(uniforms.model,false,m);gl.bindVertexArray(g.vao);if(g.index)gl.drawElements(gl.TRIANGLES,g.count,gl.UNSIGNED_SHORT,0);else gl.drawArrays(gl.TRIANGLES,0,g.count)}
+function objects(uniforms,includeWater){
+ gl.uniform1i(uniforms.mode,1);draw(grid,I,uniforms);
+ gl.uniform1i(uniforms.mode,0);draw(environment,I,uniforms);
+ for(const [g,m] of sceneItems)draw(g,m,uniforms);
+ if(movingSoil.count)draw(movingSoil,I,uniforms);
+ if(includeWater){gl.uniform1i(uniforms.mode,2);draw(grid,I,uniforms)}
+}
 function render(dt){resize();cameraStep(dt);data=[];modelParts();updateMovingSoil();waterDetails();gl.useProgram(sceneP);gl.uniformMatrix4fv(U.lightVP,false,lightMatrix);gl.uniform1i(U.field,0);gl.uniform1i(U.detail,1);gl.uniform1i(U.soil,3);bindTex(3,soilTex);gl.uniform1i(U.geology,4);bindTex(4,geologyTex);gl.uniform1i(U.shadowMap,2);bindTex(0,fieldTex);bindTex(1,detailT);gl.uniform3fv(U.eye,cameraEye);gl.uniform1f(U.t,time);gl.uniform4fv(U.lamps,lampArray);gl.enable(gl.DEPTH_TEST);
- if(shadowTick++%(resHeight<270?3:2)===0){bindTex(2,fieldTex);gl.bindFramebuffer(gl.FRAMEBUFFER,shadowFB);gl.viewport(0,0,shadowSize,shadowSize);gl.clear(gl.DEPTH_BUFFER_BIT);gl.uniform1i(U.pass,1);gl.uniformMatrix4fv(U.vp,false,lightMatrix);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.3,2);objects(false);gl.disable(gl.POLYGON_OFFSET_FILL)}
+ // Draw the depth map from the same scene items and terrain as the color pass.
+ gl.useProgram(shadowP);gl.uniform1i(shadowU.field,0);gl.uniformMatrix4fv(shadowU.vp,false,lightMatrix);
+ gl.bindFramebuffer(gl.FRAMEBUFFER,shadowFB);gl.viewport(0,0,shadowSize,shadowSize);gl.clear(gl.DEPTH_BUFFER_BIT);
+ gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(0,2);objects(shadowU,false);gl.disable(gl.POLYGON_OFFSET_FILL);
  gl.bindFramebuffer(gl.FRAMEBUFFER,mainFB);gl.viewport(0,0,renderW,renderH);gl.clearBufferfv(gl.COLOR,0,[.70,.75,.60,1]);gl.clearBufferfv(gl.COLOR,1,[.5,.5,.5,0]);gl.clear(gl.DEPTH_BUFFER_BIT);
- gl.drawBuffers([gl.COLOR_ATTACHMENT0]);gl.disable(gl.DEPTH_TEST);gl.useProgram(skyP);gl.bindVertexArray(null);gl.drawArrays(gl.TRIANGLES,0,3);gl.drawBuffers([gl.COLOR_ATTACHMENT0,gl.COLOR_ATTACHMENT1]);gl.enable(gl.DEPTH_TEST);gl.useProgram(sceneP);gl.uniform1i(U.pass,0);gl.uniformMatrix4fv(U.vp,false,VP);bindTex(2,shadowTex);objects(true);
+ gl.drawBuffers([gl.COLOR_ATTACHMENT0]);gl.disable(gl.DEPTH_TEST);gl.useProgram(skyP);gl.bindVertexArray(null);gl.drawArrays(gl.TRIANGLES,0,3);gl.drawBuffers([gl.COLOR_ATTACHMENT0,gl.COLOR_ATTACHMENT1]);gl.enable(gl.DEPTH_TEST);gl.useProgram(sceneP);gl.uniformMatrix4fv(U.vp,false,VP);bindTex(2,shadowTex);objects(U,true);
  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.disable(gl.DEPTH_TEST);gl.useProgram(finishP);bindTex(0,colorTex);bindTex(1,edgeTex);gl.uniform1i(loc(finishP,'image'),0);gl.uniform1i(loc(finishP,'edges'),1);gl.bindVertexArray(null);gl.drawArrays(gl.TRIANGLES,0,3)}
 // Low-resolution, hand-plotted transmitter graphics; text uses a separate HUD canvas.
 function brand(){const c=$('wordmark'),g=c.getContext('2d');g.clearRect(0,0,155,32);g.fillStyle='#f6ac57';const mark=['000011000','000111100','001111110','011001111','110000011','001100000','011111000','110011100','000001110'];for(let y=0;y<mark.length;y++)for(let x=0;x<9;x++)if(mark[y][x]==='1')g.fillRect(x*3,2+y*3,3,3);
@@ -1724,7 +1779,7 @@ function hintUpdate(){document.body.classList.toggle('touchMode',inputType==='to
 function chooseUnit(i){const old=vehicles[active];old.speed=old.turn=0;active=(i+4)%4;document.querySelectorAll('.unit').forEach((b,j)=>{b.classList.toggle('active',j===active);b.setAttribute('aria-pressed',String(j===active))});hintUpdate()}
 function changeView(v=(view+1)%3){view=v;$('camId').textContent='CAM 0'+(v+1);$('camName').textContent=['DIORAMA','PIT RIM','CHASE'][v];hintUpdate()}
 function toggleMarkers(){markersOn=!markersOn;$('markBtn').innerHTML='<span>⌖</span> MARKERS '+(markersOn?'ON':'OFF')}
-function showProgram(id){initYard(id);noticeTime=0;$('notice').style.display='none';if(environment){gl.deleteVertexArray(environment.vao);gl.deleteBuffer(environment.buf)}environment=makeEnvironment();uploadFields();particles=[];chooseUnit(0);camInit=false;changeView(0);$('programNum').textContent=id===2?'OPEN FIELD   /   FREE PLAY':'FIELD PROGRAM   /   0'+(id+1);$('programName').textContent=titles[id];$('mission').textContent=briefs[id];$('dialog').classList.remove('open');shadowTick=0}
+function showProgram(id){initYard(id);noticeTime=0;$('notice').style.display='none';if(environment){gl.deleteVertexArray(environment.vao);gl.deleteBuffer(environment.buf)}environment=makeEnvironment();uploadFields();particles=[];chooseUnit(0);camInit=false;changeView(0);$('programNum').textContent=id===2?'OPEN FIELD   /   FREE PLAY':'FIELD PROGRAM   /   0'+(id+1);$('programName').textContent=titles[id];$('mission').textContent=briefs[id];$('dialog').classList.remove('open')}
 let lastSoilReadout = -Infinity;
 function refreshSoilReadout(force=false) {
   const output = document.getElementById('soilReadout');

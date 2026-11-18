@@ -191,7 +191,7 @@ def scenario_checks(p):
       for(let i=0;i<800;i++){
         const dist=Math.hypot(x-truck.x,z-truck.z);if(dist<.035)break;
         const delta=Math.atan2(x-truck.x,z-truck.z)-truck.yaw;
-        c(1,{drive:Math.min(1,dist*.65),turn:Math.max(-1,Math.min(1,Math.atan2(Math.sin(delta),Math.cos(delta))*2))});
+        c(1,{drive:Math.min(1,dist*.65),turn:Math.max(-1,Math.min(1,-Math.atan2(Math.sin(delta),Math.cos(delta))*2))});
       }
       c(112,{lift:1});
       t.select(3);
