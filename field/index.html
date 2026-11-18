@@ -280,6 +280,140 @@ function toolJoints(v,m){let l=v.lift,cu=v.curl;const j=(base,...args)=>matmul(b
  let base=j(m,0,1.15,0,v.swing),reach=1.65+1.4*v.stick+.25*Math.cos(l*2)-.47+.58*(1-v.stick),rise=-1.44+l*2.64,dist=clamp(Math.hypot(reach,rise),.34,3.149);
  let up=Math.atan2(rise,reach)+Math.acos(clamp((dist*dist+1.74**2-1.41**2)/(2*dist*1.74),-1,1)),bend=Math.acos(clamp((dist*dist-1.74**2-1.41**2)/(2*1.74*1.41),-1,1));
  let arm=j(base,.42,.53,.47,0,-up),stick=j(arm,0,0,1.74,0,bend),tool=j(stick,0,0,1.41,0,.31+(.52-cu)*1.56);return {base,arm,stick,tool,lip:[0,-.29,.62]}}
+// Rigid collision proxies follow the same local joints as the visible machine.
+// The dump body uses separate sheets so a raised bucket can enter its open top.
+function vehicleSolids(v){
+ const m=pose(v.x,v.y+.045,v.z,v.yaw,v.pitch,v.roll),rig=toolJoints(v,m),list=[];
+ function solid(t,x,y,z,w,h,d){
+  const a=[[t[0],t[1],t[2]],[t[4],t[5],t[6]],[t[8],t[9],t[10]]],r=[w/2,h/2,d/2];
+  const extent=[0,1,2].map(i=>r[0]*Math.abs(a[0][i])+r[1]*Math.abs(a[1][i])+r[2]*Math.abs(a[2][i]));
+  list.push({p:pt(t,[x,y,z]),a,r,extent});
+ }
+ function track(t,x,front,len){solid(t,x,.51,front,.69,.99,len)}
+ if(v.type===0){
+  for(let s of [-1,1]){
+   track(m,s*.80,-.10,2.62);
+   const pivot=pt(m,[s*1.34,.58,-.48]),pin=pt(rig.tool,[s*1.28,-.05,-.25]);
+   const d=Math.hypot(...sub(pin,pivot));
+   const axis=pose(...pivot,Math.atan2(pin[0]-pivot[0],pin[2]-pivot[2]),-Math.asin((pin[1]-pivot[1])/d));
+   solid(axis,0,0,d/2,.14,.18,d);
+  }
+  solid(m,0,.93,-.06,1.49,.44,2.42);
+  solid(m,0,1.38,.38,1.37,.52,1.60);
+  solid(m,0,1.62,-.65,1.25,1.04,1.04);
+  solid(rig.tool,0,.03,-.13,2.87,.85,.27);
+  solid(rig.tool,0,-.34,.09,2.97,.16,.25);
+ }
+ if(v.type===1){
+  solid(m,0,.94,-.71,1.64,.84,1.79);
+  solid(m,0,1.69,-.43,1.49,1.08,1.28);
+  solid(rig.base,0,.98,.67,1.32,.98,1.41);
+  for(let s of [-1,1]){
+   solid(m,s*.90,.60,-.93,.52,1.20,1.21);
+   solid(rig.base,s*.92,.61,.97,.52,1.22,1.23);
+   solid(rig.base,s*.91,1.53,.91,.56,.11,1.36);
+   solid(rig.arm,s*.45,.045,1.10,.24,.25,2.35);
+   solid(rig.tool,s*(loaderLipHalf-.04),-.10,.19,.09,.43,1.20);
+  }
+  solid(rig.tool,0,.12,-.35,2*loaderLipHalf,.68,.16);
+  solid(rig.tool,0,-.28,.34,2*loaderLipHalf,.17,1.44);
+ }
+ if(v.type===2){
+  solid(m,0,.69,-.06,1.73,.31,3.49);
+  solid(m,0,1.05,1.18,2.02,.50,1.14);
+  solid(m,0,1.72,1.10,1.86,.98,1.15);
+  for(let s of [-1,1])for(let z of [-1.22,-.27,1.25])solid(m,s*.96,.51,z,.52,1.01,1.04);
+  solid(rig.tool,0,.08,.98,2.01,.16,2.23);
+  for(let s of [-1,1]){
+   solid(rig.tool,s*.99,.46,1,.17,.85,2.24);
+   solid(rig.tool,s*1.01,.87,.98,.20,.13,2.26);
+  }
+  solid(rig.tool,0,.53,2,2.03,1.01,.15);
+  const gate=matmul(rig.tool,pose(0,.81,-.225,0,Math.max(0,v.lift-.16)*1.54));
+  solid(gate,0,-.33,-.023,1.89,.66,.16);
+ }
+ if(v.type===3){
+  for(let s of [-1,1])track(m,s*.79,0,2.58);
+  solid(rig.base,0,.27,-.21,1.95,.50,2.24);
+  solid(rig.base,-.46,.95,.05,1.16,1.11,1.49);
+  solid(rig.base,.51,.66,-.55,.86,.48,1.28);
+  solid(rig.arm,.04,.05,.86,.48,.31,1.84);
+  solid(rig.stick,.08,.02,.69,.40,.21,1.51);
+  solid(rig.tool,0,-.26,.40,.86,.11,.69);
+  solid(rig.tool,0,.03,.07,.86,.52,.10);
+  for(let s of [-1,1])solid(rig.tool,s*.40,-.133,.27,.08,.28,.53);
+ }
+ return list;
+}
+function solidPenetration(a,b){
+ for(let i=0;i<3;i++)if(Math.abs(a.p[i]-b.p[i])>=a.extent[i]+b.extent[i])return 0;
+ const d=sub(a.p,b.p);let min=Infinity;
+ function test(axis){
+  const length=Math.hypot(...axis);
+  if(length<1e-5)return true;
+  let depth=-Math.abs(dot(d,axis));
+  for(let i=0;i<3;i++)depth+=a.r[i]*Math.abs(dot(a.a[i],axis))+b.r[i]*Math.abs(dot(b.a[i],axis));
+  if(depth<.008*length)return false;
+  min=Math.min(min,depth/length-.008);return true;
+ }
+ for(let i=0;i<3;i++)if(!test(a.a[i])||!test(b.a[i]))return 0;
+ for(const aa of a.a)for(const bb of b.a)if(!test(cross(aa,bb)))return 0;
+ return min;
+}
+function contactSeverity(parts,other){
+ let amount=0;
+ for(const a of parts)for(const b of other){
+  const penetration=solidPenetration(a,b);
+  amount+=penetration*penetration;
+ }
+ return amount;
+}
+function clearRigMotion(v,target){
+ const keys=Object.keys(target);
+ if(keys.every(key=>Math.abs(target[key]-v[key])<1e-6))return 1;
+ const nearby=vehicles.filter(o=>o!==v&&(v.x-o.x)**2+(v.z-o.z)**2<9.5**2);
+ if(!nearby.length)return 1;
+ const oldParts=vehicleSolids(v),otherParts=nearby.map(vehicleSolids);
+ const before=otherParts.map(parts=>contactSeverity(oldParts,parts));
+ const candidate={...v};
+ function clearAt(t){
+  for(const key of keys)candidate[key]=mix(v[key],target[key],t);
+  const parts=vehicleSolids(candidate);
+  return otherParts.every((other,i)=>contactSeverity(parts,other)<=before[i]+1e-9);
+ }
+ // Check the middle as well as the end so a thin sheet cannot skip a corner.
+ const half=clearAt(.5);
+ if(half&&clearAt(1))return 1;
+ let lo=half?.5:0,hi=half?1:.5;
+ for(let n=0;n<5;n++){
+  const t=(lo+hi)/2;
+  if(clearAt(t))lo=t;else hi=t;
+ }
+ return lo;
+}
+function moveRig(v,target){
+ let amount=clearRigMotion(v,target);
+ for(const key in target)v[key]=mix(v[key],target[key],amount);
+ return amount;
+}
+function fitRigGround(v,dt){
+ const halfW=[.82,.93,.96,.80][v.type],halfL=[1.02,.96,1.24,1.02][v.type];
+ const s=Math.sin(v.yaw),c=Math.cos(v.yaw);
+ function under(x,z){return sample(h,v.x+c*x+s*z,v.z-s*x+c*z)}
+ const fl=under(-halfW,halfL),fr=under(halfW,halfL),bl=under(-halfW,-halfL),br=under(halfW,-halfL);
+ const follow=1-Math.exp(-dt*9);
+ v.pitch=mix(v.pitch,clamp(-Math.atan2(fl+fr-bl-br,4*halfL),-.54,.54),follow);
+ v.roll=mix(v.roll,clamp(Math.atan2(fr+br-fl-bl,4*halfW),-.51,.51),follow);
+ const tilt=pose(0,0,0,v.yaw,v.pitch,v.roll);
+ let support=sample(h,v.x,v.z)-.40;
+ for(const side of [-1,1])for(const fore of [-1,0,1]){
+  const x=side*halfW,z=fore*halfL,rx=tilt[0]*x+tilt[8]*z,rz=tilt[2]*x+tilt[10]*z;
+  support=Math.max(support,sample(h,v.x+rx,v.z+rz)-tilt[1]*x-tilt[9]*z-.043);
+ }
+ v.y=Math.max(support-.045,mix(v.y,support,follow));
+ return {x:v.x,y:v.y,z:v.z,yaw:v.yaw,turn:v.turn,pitch:v.pitch,roll:v.roll};
+}
+
 function tipPoint(v,rig){let g=rig||toolJoints(v,pose(v.x,v.y+.045,v.z,v.yaw,v.pitch,v.roll)),p=pt(g.tool,g.lip);return [p[0],p[2],v.yaw+(v.type===3?v.swing:v.type===1?-v.turn*.40:0),p[1]]}
 // Released payload stays in the sand ledger while falling. A moving truck
 // catches it only when the grains actually cross its open bed.
@@ -296,14 +430,35 @@ function settleGrains(dt){let remain=0,truck=vehicles[2],sn=Math.sin(truck.yaw),
  if(p.y<=sample(h,p.x,p.z)+.035){deposit(p.x,p.z,p.source===2?.76:.55,.51,p.yaw,p.amount);if(p.source===2&&Math.hypot(p.x-levee[0],p.z-levee[1])<2.5)haul+=p.amount*AREA}
  else fallingSand[remain++]=p}fallingSand.length=remain}
 function workMachine(v,dt,ctl){let type=v.type,f=fine?.43:1;let hy=ctl.hy*f,hx=ctl.hx*f,reach=ctl.reach*f,oldLift=v.lift;
- v.lift=clamp(v.lift+hy*dt*(type===2?.47:.59),0,1);
- if(type===3){v.swing-=hx*dt*1.25;v.stick=clamp(v.stick+reach*dt*.57,0,1);v.curl=clamp(v.curl+ctl.curl*dt*.75,0,1)}
- else v.curl=clamp(v.curl+hx*dt*.85,0,1);
+ let curlInput=ctl.curl;
+ const actuators={};
+ if(hy)actuators.lift=clamp(v.lift+hy*dt*(type===2?.47:.59),0,1);
+ if(type===3){
+   if(hx)actuators.swing=v.swing-hx*dt*1.25;
+   if(reach)actuators.stick=clamp(v.stick+reach*dt*.57,0,1);
+   if(curlInput)actuators.curl=clamp(v.curl+curlInput*dt*.75,0,1);
+ }else if(hx)actuators.curl=clamp(v.curl+hx*dt*.85,0,1);
+ const keys=Object.keys(actuators);
+ if(keys.length){
+   if(keys.length===1){
+     const t=moveRig(v,actuators);
+     hy*=t;hx*=t;reach*=t;curlInput*=t;
+   }else if(clearRigMotion(v,actuators)===1)Object.assign(v,actuators);
+   else{
+     for(const key of keys){
+       const t=moveRig(v,{[key]:actuators[key]});
+       if(key==='lift')hy*=t;
+       if(key==='swing'||(key==='curl'&&type!==3))hx*=t;
+       if(key==='stick')reach*=t;
+       if(key==='curl'&&type===3)curlInput*=t;
+     }
+   }
+ }
  let loader=type===1?toolJoints(v,pose(v.x,v.y+.045,v.z,v.yaw,v.pitch,v.roll)):null;
  let [x,z,a,lipY]=tipPoint(v,loader),sn=Math.sin(a),cs=Math.cos(a),amount=0;
  if(type===0){let advance=Math.max(0,v.speed),depth=Math.max(0,.54-v.lift);if(depth>.001&&advance>.01){let tilt=(v.curl-.5)*.8;for(let s=-1;s<=1;s++){let xx=x+cs*s*.79,zz=z-sn*s*.79,cut=remove(xx,zz,.49,.42,a,dt*advance*clamp(sample(h,xx,zz)-lipY+.19+s*tilt*.3,0,.74)*.86);deposit(xx+sn*.62,zz+cs*.62,.54,.43,a,cut);amount+=cut}}}
  if(type===1||type===3){let contact=clamp((sample(h,x,z)-lipY+.18)*1.9,0,1);
- let digging=type===1?Math.max(0,v.speed*.68,hx,-hy*.45):Math.max(0,-hy,Math.abs(reach)*.65,ctl.curl,.32*Math.abs(hx));
+ let digging=type===1?Math.max(0,v.speed*.68,hx,-hy*.45):Math.max(0,-hy,Math.abs(reach)*.65,curlInput,.32*Math.abs(hx));
  if(digging>.01&&v.payload<v.capacity){
   if(loader){
    // Take three passes across the actual edge, including either side on a bank.
@@ -328,22 +483,32 @@ function mechanics(dt,ctl){for(const v of vehicles){let mov=v.type===active,cmd=
  let slip=clamp(Math.abs(cmd.drive)*(.15*wetness+.62*dep+.35*Math.abs(slope)+.17*fraction)+v.work*.25,0,.89);
  v.slip=mix(v.slip,slip,.17);let target=cmd.drive*[2.3,3.2,3.5,1.95][v.type]*(1-slip*.8)*clamp(1-slope*Math.sign(cmd.drive)*.32,.48,1.3)/(1+.32*fraction+dep*.7);
  let acc=v.type===2?2.1:3.4;v.speed+=clamp(target-v.speed,-dt*acc*(Math.abs(target)<.1?1.9:1),dt*acc);
- if(!mov)v.speed=0;v.turn=mix(v.turn,cmd.steer,1-Math.exp(-dt*6));let steerRate=(v.type===0||v.type===3)?1.13:1.08*clamp(Math.abs(v.speed)/.85,0,1)*Math.sign(v.speed);
- v.yaw-=dt*v.turn*steerRate;let nx=clamp(v.x+Math.sin(v.yaw)*v.speed*dt,-HX+2.05,HX-2.05),nz=clamp(v.z+Math.cos(v.yaw)*v.speed*dt,-HZ+2.05,HZ-2.05);
- if(vehicles.some(o=>o!==v&&Math.hypot(o.x-nx,o.z-nz)<1.94)){nx=v.x;nz=v.z;v.speed*=.55}
- v.x=nx;v.z=nz;v.travel+=v.speed*dt;
+ if(!mov)v.speed=0;
+ const turn=mix(v.turn,cmd.steer,1-Math.exp(-dt*6));
+ const steerRate=(v.type===0||v.type===3)?1.13:1.08*clamp(Math.abs(v.speed)/.85,0,1)*Math.sign(v.speed);
+ const yaw=v.yaw-dt*turn*steerRate;
+ function travelTarget(yaw,turn){
+   const x=clamp(v.x+Math.sin(yaw)*v.speed*dt,-HX+2.05,HX-2.05);
+   const z=clamp(v.z+Math.cos(yaw)*v.speed*dt,-HZ+2.05,HZ-2.05);
+   return fitRigGround({...v,x,z,yaw,turn},dt);
+ }
+ const motionTarget=travelTarget(yaw,turn);
+ const clear=clearRigMotion(v,motionTarget);
+ let travel=1;
+ if(clear===1)Object.assign(v,motionTarget);
+ else if(mov&&(Math.abs(yaw-v.yaw)>1e-6||Math.abs(turn-v.turn)>1e-6)){
+   // An approach can be blocked while the driver can still steer away.
+   moveRig(v,{turn});
+   moveRig(v,{yaw});
+   travel=moveRig(v,travelTarget(v.yaw,v.turn));
+ }else{
+   travel=clear;
+   for(const key in motionTarget)v[key]=mix(v[key],motionTarget[key],travel);
+ }
+ v.travel+=v.speed*dt*travel;
+ if(travel<1)v.speed*=travel*.55;
  if(mov&&(Math.abs(v.speed)>.06||Math.abs(v.turn)>.1))tread(v,dt,fraction);
  if(mov)workMachine(v,dt,cmd);else {if(v.type===2&&v.lift>.39)unload(v,dt*v.capacity*(v.lift-.39)*1.8);v.load*=.9;v.work*=.85}
- // Fit the pitch and roll to both axles, then keep every contact patch above soil.
- // This lets a loaded rigid chassis bridge a narrow cut without sinking one wheel.
- let halfW=[.82,.93,.96,.80][v.type],halfL=[1.02,.96,1.24,1.02][v.type];s=Math.sin(v.yaw);c=Math.cos(v.yaw);
- function terrainUnder(lx,lz){return sample(h,v.x+c*lx+s*lz,v.z-s*lx+c*lz)}
- let fl=terrainUnder(-halfW,halfL),fr=terrainUnder(halfW,halfL),bl=terrainUnder(-halfW,-halfL),br=terrainUnder(halfW,-halfL);
- let follow=1-Math.exp(-dt*9);v.pitch=mix(v.pitch,clamp(-Math.atan2(fl+fr-bl-br,4*halfL),-.54,.54),follow);v.roll=mix(v.roll,clamp(Math.atan2(fr+br-fl-bl,4*halfW),-.51,.51),follow);
- let tilt=pose(0,0,0,v.yaw,v.pitch,v.roll),support=sample(h,v.x,v.z)-.40;
- for(let side of [-1,1])for(let fore of [-1,0,1]){let lx=side*halfW,lz=fore*halfL,rx=tilt[0]*lx+tilt[8]*lz,rz=tilt[2]*lx+tilt[10]*lz;
- support=Math.max(support,sample(h,v.x+rx,v.z+rz)-tilt[1]*lx-tilt[9]*lz-.043)}
- v.y=Math.max(support-.045,mix(v.y,support,1-Math.exp(-dt*9)));
  let impulse=(v.speed-v.lastSpeed)/dt;v.antennaV+=dt*(-27*v.antenna-5*v.antennaV-impulse*.45+v.turn*Math.abs(v.speed));v.antenna+=dt*v.antennaV;v.lastSpeed=v.speed;v.charge=Math.max(0,v.charge-dt*(.000012+.00012*Math.abs(v.speed)/3+.00019*v.load));v.volts=mix(v.volts,7.04+1.33*v.charge-.37*Math.abs(v.speed)/3-.62*v.load-.1*fraction,.15)}
 }
 function physics(dt,ctl=noInput){mechanics(dt,ctl);settleGrains(dt);tick++;let sourceVolume=flow*dt/AREA;depositWater(source[0],source[1],sourceVolume);waterIn+=sourceVolume*AREA;

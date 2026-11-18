@@ -24,6 +24,8 @@ jobs:
           SANDPIT_CHROMIUM: /usr/bin/google-chrome
           SANDPIT_EVIDENCE: evidence/earthworks
         run: |
+          node verification/contact.cjs
+          node verification/soil.cjs
           python verification/check.py
           node verification/field.cjs
       - uses: actions/upload-artifact@v4

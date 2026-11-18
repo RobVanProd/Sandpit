@@ -2,9 +2,9 @@
   "reports": [
     {
       "name": "dozer",
-      "ticks": 55,
-      "sandError": -2.2737367544323206e-12,
-      "waterError": 2.6375603090489363e-14,
+      "ticks": 46,
+      "sandError": -3.410605131648481e-13,
+      "waterError": 3.6741443221188774e-14,
       "finite": true,
       "glError": 0,
       "airborneSand": 0,
@@ -14,7 +14,7 @@
         0,
         0
       ],
-      "worked": 3.2722618026559918,
+      "worked": 3.3916478013401847,
       "payload": [
         0,
         0,
@@ -24,9 +24,9 @@
     },
     {
       "name": "loader digging",
-      "ticks": 103,
-      "sandError": -1.1368683772161603e-12,
-      "waterError": -1.3114509478384662e-15,
+      "ticks": 94,
+      "sandError": -9.094947017729282e-13,
+      "waterError": -1.4037382367604323e-14,
       "finite": true,
       "glError": 0,
       "airborneSand": 0,
@@ -36,19 +36,19 @@
         0,
         0
       ],
-      "worked": 7.839120968691481,
+      "worked": 7.822117216793558,
       "payload": [
         0,
-        4.566859166035489,
+        4.430469415453374,
         0,
         0
       ]
     },
     {
       "name": "loader to truck",
-      "ticks": 132,
-      "sandError": -3.979039320256561e-12,
-      "waterError": 1.2750217548429532e-14,
+      "ticks": 123,
+      "sandError": -9.094947017729282e-13,
+      "waterError": -5.8581611783736776e-15,
       "finite": true,
       "glError": 0,
       "airborneSand": 0,
@@ -58,19 +58,19 @@
         0,
         0
       ],
-      "worked": 12.405980134726976,
+      "worked": 12.232117216793563,
       "payload": [
         0,
-        0,
-        4.56685916603549,
+        0.020469415453374884,
+        4.41,
         0
       ]
     },
     {
       "name": "truck unloading",
-      "ticks": 191,
-      "sandError": -9.094947017729282e-13,
-      "waterError": -4.7482850984437164e-14,
+      "ticks": 182,
+      "sandError": 0,
+      "waterError": 3.6914915568786455e-15,
       "finite": true,
       "glError": 0,
       "airborneSand": 0.09435555555555544,
@@ -80,19 +80,19 @@
         0,
         0
       ],
-      "worked": 14.316680134726974,
+      "worked": 14.142817216793562,
       "payload": [
         0,
-        0,
-        2.6561591660354926,
+        0.020469415453374884,
+        2.4993000000000025,
         0
       ]
     },
     {
       "name": "excavator cut",
-      "ticks": 216,
-      "sandError": -4.547473508864641e-13,
-      "waterError": 6.702971511174383e-15,
+      "ticks": 207,
+      "sandError": -1.3642420526593924e-12,
+      "waterError": 1.987993103469421e-14,
       "finite": true,
       "glError": 0,
       "airborneSand": 0,
@@ -102,12 +102,12 @@
         0,
         0
       ],
-      "worked": 17.469062544772218,
+      "worked": 21.142817216793556,
       "payload": [
         0,
+        0.020469415453374884,
         0,
-        0,
-        3.15238241004524
+        7
       ]
     },
     {
@@ -157,21 +157,21 @@
     {
       "name": "180 seconds randomized gamepad and rain",
       "ticks": 5400,
-      "sandError": 2.2737367544323206e-13,
-      "waterError": 5.432809757621726e-11,
+      "sandError": -1.2505552149377763e-12,
+      "waterError": 5.5990767577895895e-11,
       "finite": true,
       "glError": 0,
       "airborneSand": 0,
       "breaches": 0,
-      "campDepth": 1.7828018967389443,
+      "campDepth": 1.782798422118078,
       "basins": [
         1,
         1
       ],
-      "worked": 93.44402294924677,
+      "worked": 95.91397369581505,
       "payload": [
         0,
-        3.9404133988930603,
+        7.0614221694451125,
         0,
         0
       ]
@@ -179,8 +179,8 @@
     {
       "name": "multitouch",
       "ticks": 30,
-      "sandError": -1.2505552149377763e-12,
-      "waterError": -3.5626883387873676e-15,
+      "sandError": -4.547473508864641e-13,
+      "waterError": 8.74430736153009e-15,
       "finite": true,
       "glError": 0,
       "airborneSand": 0,
@@ -190,7 +190,7 @@
         0,
         0
       ],
-      "worked": 4.41550584005721,
+      "worked": 4.610219135765111,
       "payload": [
         0,
         0,
@@ -229,7 +229,7 @@
       2,
       3
     ],
-    "maxError": 1.5916157281026244e-12
+    "maxError": 1.8189894035458565e-12
   },
   "errors": [],
   "touch": {
