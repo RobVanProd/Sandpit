@@ -56,6 +56,10 @@ function initYard(id){scenario=id;flow=id===1?.49:.36;rain=false;waterIn=waterOu
  let bottom=-.27-.035*(z+HZ)+.05*Math.sin(z*1.8);
  earth=mix(earth,bottom,Math.exp(-Math.pow(dist/sw,2.62)));earth+=.43*gauss(x,z,-4.3,-6.0,.84,1.42)+.31*gauss(x,z,-6.3,.8,.68,1.30);
  for(const [bx,bz,br] of [...basins,camp]){let radius=Math.hypot(x-bx,(z-bz)*1.14);earth-=.97*Math.exp(-Math.pow(radius/br,3))}
+ if(id===0){let original=earth;
+ earth=channel(earth,x,z,river(-3.5),-3.5,8,-5,.75,-.13,-.54,.24);
+ earth=channel(earth,x,z,river(-3.5),-3.5,6.3,5,.77,-.12,-.64,-.52);
+ earth=mix(original,earth,clamp((x+.35)/3.1,0,.96));earth+=.27*gauss(x,z,river(.7),.70,2.30,1.13)}
  if(id===1){earth+=.77*gauss(x,z,river(2.75),2.75,1.95,.73);
  earth=channel(earth,x,z,river(.95),.95,6.3,5.0,.90,-.58,-.89,.35);
  earth=channel(earth,x,z,river(-2.65),-2.65,8,-5,.73,-.12,-.48,.16);
@@ -63,7 +67,7 @@ function initYard(id){scenario=id;flow=id===1?.49:.36;rain=false;waterIn=waterOu
  earth+=1.22*Math.exp(-(((z-levee[1])/.52)**2))*Math.exp(-(((x-levee[0])/2.95)**4));earth-=.53*gauss(x,z,levee[0]+.2,.1,.45,.7)}
  h[i]=Math.max(floor+.1,earth);
  let reach=id===1?-.15:4.7;let surface=.36-.027*(z+HZ),tail=clamp((reach-z)/2.6,0,1);w[i]=dist<sw*1.65?Math.max(0,surface-h[i])*tail:0;wet[i]=clamp(w[i]*3+Math.max(0,1-dist/(sw*1.65))*.28,0,1)}
- vehicles=[[-10.1,4.5,1.43],[3.1,-1.25,-1.2],[10.7,.7,-2.52],[-1.7,5.1,-.52]].map(([x,z,yaw],type)=>({x,z,yaw,type,speed:0,roll:0,pitch:0,y:sample(h,x,z),load:0,slip:0,volts:8.36,payload:0,capacity:[0,15,55,7][type],lift:[.19,.28,.03,.38][type],curl:.45,swing:0,stick:.58,work:0,turn:0,travel:0,antenna:0,antennaV:0,whip:0,lastSpeed:0,head:true,discharge:0}));
+ vehicles=[[-10.1,4.5,1.43],[3.1,-1.25,-1.2],[10.7,.7,-2.52],[-1.7,5.1,-.52]].map(([x,z,yaw],type)=>({x,z,yaw,type,speed:0,roll:0,pitch:0,y:sample(h,x,z),load:0,slip:0,volts:8.36,charge:1,payload:0,capacity:[0,15,55,7][type],lift:[.19,.28,.03,.38][type],curl:.45,swing:0,stick:.58,work:0,turn:0,travel:0,antenna:0,antennaV:0,whip:0,lastSpeed:0,head:true,discharge:0}));
  active=0;worked=0;initialSand=sandTotal();startWater=sum(w)*AREA;leveeBase=sample(h,...levee);spillBase=region(h,...spill,.65);baseCut=0;
 }
 function footprint(x,z,rx,rz,ang,fn){let r=Math.max(rx,rz),c=Math.cos(ang),s=Math.sin(ang);let x0=clamp(Math.ceil((x-r+HX)/DX),0,NX-1),x1=clamp(Math.floor((x+r+HX)/DX),0,NX-1),z0=clamp(Math.ceil((z-r+HZ)/DX),0,NZ-1),z1=clamp(Math.floor((z+r+HZ)/DX),0,NZ-1);
@@ -110,7 +114,7 @@ function mechanics(dt,ctl){for(const v of vehicles){let mov=v.type===active,cmd=
  if(mov)workMachine(v,dt,cmd);else {if(v.type===2&&v.lift>.39)unload(v,dt*v.capacity*(v.lift-.39)*1.8);v.load*=.9;v.work*=.85}
  let x=v.x,z=v.z;s=Math.sin(v.yaw);c=Math.cos(v.yaw);let fr=sample(h,x+s*1.02,z+c*1.02),bk=sample(h,x-s*1.02,z-c*1.02),rt=sample(h,x+c*.8,z-s*.8),lt=sample(h,x-c*.8,z+s*.8);
  let follow=1-Math.exp(-dt*8);v.y=mix(v.y,(fr+bk+rt+lt)*.25,follow);v.pitch=mix(v.pitch,clamp(-Math.atan2(fr-bk,2.04),-.48,.48),follow);v.roll=mix(v.roll,clamp(Math.atan2(rt-lt,1.6),-.45,.45),follow);
- let impulse=(v.speed-v.lastSpeed)/dt;v.antennaV+=dt*(-27*v.antenna-5*v.antennaV-impulse*.45+v.turn*Math.abs(v.speed));v.antenna+=dt*v.antennaV;v.lastSpeed=v.speed;v.volts=mix(v.volts,8.37-.37*Math.abs(v.speed)/3-.62*v.load-.1*fraction,.15)}
+ let impulse=(v.speed-v.lastSpeed)/dt;v.antennaV+=dt*(-27*v.antenna-5*v.antennaV-impulse*.45+v.turn*Math.abs(v.speed));v.antenna+=dt*v.antennaV;v.lastSpeed=v.speed;v.charge=Math.max(0,v.charge-dt*(.000012+.00012*Math.abs(v.speed)/3+.00019*v.load));v.volts=mix(v.volts,7.04+1.33*v.charge-.37*Math.abs(v.speed)/3-.62*v.load-.1*fraction,.15)}
 }
 function physics(dt,ctl=noInput){mechanics(dt,ctl);tick++;let sourceVolume=flow*dt/AREA;depositWater(source[0],source[1],sourceVolume);waterIn+=sourceVolume*AREA;
  if(rain){let drop=.0032*dt;for(let i=0;i<N;i++)w[i]+=drop;waterIn+=N*drop*AREA}
@@ -148,7 +152,7 @@ function seep(i,a,b,dt){if(w[a]<.04&&w[b]<.04)return;let up=h[a]+w[a]>h[b]+w[b]?
 function region(a,x,z,r){let total=0,n=0;footprint(x,z,r,r,0,(i,p)=>{total+=a[i]*p;n+=p});return total/Math.max(n,.01)}
 function objectives(){basinFill=basins.map(([x,z,r])=>clamp(region(w,x,z,r)/.32,0,1));campDepth=region(w,...camp);let flux=0;for(let x=-6.5;x<-1.8;x+=DX)flux+=Math.max(0,qz[at(x,.27)])*AREA;leakLevel=mix(leakLevel,flux,.22);trench=Math.max(baseCut,spillBase-region(h,...spill,.65));seal=sample(h,...levee)-leveeBase;
  let win=scenario===0?Math.min(...basinFill)>.91&&campDepth<.13:scenario===1&&trench>.32&&haul>.38&&seal>.03&&leakLevel<.19&&basinFill[1]<.95;
- if(win&&!goal){goal=true;announce('PROGRAM COMPLETE   /   free to continue')}}
+ if(win&&!goal){goal=true;$('mission').textContent='Program complete. The yard is yours.';announce('PROGRAM COMPLETE   /   free to continue')}}
 // The sandbox draws at pixel resolution into a colour + edge-information target.
 const world=$('world'),gl=world.getContext('webgl2',{alpha:false,antialias:false,depth:true,powerPreference:'high-performance'});
 if(!gl){$('fail').style.display='grid';$('fail').textContent='Sandpit needs WebGL 2. Enable hardware acceleration or open it in a WebGL 2 browser.';throw Error('WebGL 2 unavailable')}
@@ -158,7 +162,8 @@ precision highp float;
 layout(location=0) in vec3 pos;layout(location=1) in vec3 normal;layout(location=2) in vec3 color;layout(location=3) in float material;
 uniform mat4 vp,lightVP,model;uniform int mode;uniform sampler2D field;out vec3 P,N,C;flat out float M;out vec4 shadowPos;
 vec2 uv(vec2 p){return (p/0.2222222222+vec2(72.,48.)+.5)/vec2(145.,97.);}
-void main(){P=(model*vec4(pos,1)).xyz;C=color;N=mat3(model)*normal;M=material;if(mode>0){vec4 a=texture(field,uv(pos.xz));P.y=a.r+(mode==2?a.g+.009:0.);}shadowPos=lightVP*vec4(P,1);gl_Position=vp*vec4(P,1);}`;
+float elevation(ivec2 ij){vec4 v=texelFetch(field,clamp(ij,ivec2(0),ivec2(144,96)),0);return v.r+(mode==2?v.g:0.);}
+void main(){P=(model*vec4(pos,1)).xyz;C=color;N=mat3(model)*normal;M=material;if(mode>0){vec4 a=texture(field,uv(pos.xz));P.y=a.r+(mode==2?a.g+.009:0.);ivec2 ij=ivec2(floor(uv(pos.xz)*vec2(145,97)));N=normalize(vec3(elevation(ij-ivec2(1,0))-elevation(ij+ivec2(1,0)),.444444,elevation(ij-ivec2(0,1))-elevation(ij+ivec2(0,1))));}shadowPos=lightVP*vec4(P,1);gl_Position=vp*vec4(P,1);}`;
 const frag=`#version 300 es
 precision highp float;precision highp int;
 in vec3 P,N,C;flat in float M;in vec4 shadowPos;layout(location=0)out vec4 col;layout(location=1)out vec4 edge;
@@ -170,16 +175,16 @@ float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(ha
 float quant(float x,float levels,float b){return floor(x*levels+b)/levels;}
 vec2 uv(vec2 p){return (p/.2222222222+vec2(72.,48.)+.5)/vec2(145.,97.);}
 vec4 data(vec2 u,sampler2D tex){vec2 g=u*vec2(145,97)-.5;ivec2 i=ivec2(floor(g));vec2 f=fract(g);ivec2 hi=ivec2(144,96);return mix(mix(texelFetch(tex,clamp(i,ivec2(0),hi),0),texelFetch(tex,clamp(i+ivec2(1,0),ivec2(0),hi),0),f.x),mix(texelFetch(tex,clamp(i+ivec2(0,1),ivec2(0),hi),0),texelFetch(tex,clamp(i+ivec2(1),ivec2(0),hi),0),f.x),f.y);}
-float shade(vec3 n){vec3 sc=shadowPos.xyz/shadowPos.w*.5+.5;if(any(lessThan(sc,vec3(.001)))||any(greaterThan(sc,vec3(.999))))return 1.;float bias=.00038+.0013*(1.-max(0.,dot(n,sun)));return sc.z-bias>texture(shadowMap,sc.xy).r?.43:1.;}
+float shade(vec3 n){vec3 sc=shadowPos.xyz/shadowPos.w*.5+.5;if(any(lessThan(sc,vec3(.001)))||any(greaterThan(sc,vec3(.999))))return 1.;float cosine=clamp(dot(n,sun),.08,1.);float bias=.00024+.00044*min(7.,sqrt(1.-cosine*cosine)/cosine);return sc.z-bias>texture(shadowMap,sc.xy).r?.43:1.;}
 void main(){if(pass==1){col=vec4(1);edge=vec4(0);return;}
 float b=bayer();vec3 n=normalize(N),rgb=C;vec2 p=P.xz;vec2 u=uv(p);float grain=hash(floor(p*17.7)),m=noise(p*.62),dots=noise(p*2.2);float strength=0.;float shadow=1.;
-if(mode>0){vec4 a=data(u,field);vec4 d=data(u,detail);vec3 geom=normalize(cross(dFdx(P),dFdy(P)));if(geom.y<0.)geom=-geom;n=geom;shadow=shade(n);
+if(mode>0){vec4 a=data(u,field);vec4 d=data(u,detail);n=normalize(N);shadow=shade(n);
 if(mode==1){float moisture=quant(clamp(a.b*.88+a.g*.65,0.,1.),6.,b);float bed=quant(clamp(.17+P.y*.17+m*.29,0.,1.),6.,b);
 vec3 dry=mix(vec3(.77,.552,.317),vec3(1.,.868,.596),bed);rgb=mix(dry,vec3(.475,.369,.238),moisture*.87);
 float lines=sin((P.y*2.7+p.x*.14+p.y*.21+noise(p*.82)*.38)*16.);float slope=1.-n.y;
 float ridges=step(.72,lines)*(.013+min(.033,slope*.23));float fleck=(grain>.94?.041:(grain<.085?-.040:0.));
-float illum=quant(clamp(.62+dot(n,sun)*.45+.08*(m-.5)+.04*(dots-.5),.42,1.14),15.,b);
-rgb=rgb*(illum+fleck-ridges)*(1.-.30*a.a)+d.a*.023;rgb*=mix(vec3(.74,.68,.65),vec3(1.),(shadow-.43)/.57);
+float direct=max(0.,dot(n,sun));float illum=quant(clamp(.57+.05*n.y+.49*direct*shadow+.08*(m-.5)+.04*(dots-.5),.43,1.17),16.,b);
+rgb=rgb*(illum+fleck-ridges)*(1.-.30*a.a)+d.a*.023;rgb*=mix(vec3(.96,.91,.87),vec3(1.),clamp(direct*shadow*1.85,0.,1.));
 for(int k=0;k<8;k++){vec2 dir=vec2(sin(lamps[k].z),cos(lamps[k].z));vec2 v=p-lamps[k].xy;float f=dot(v,dir);if(f>0.&&f<3.3){float side=abs(v.x*dir.y-v.y*dir.x);rgb+=vec3(.14,.09,.025)*clamp(1.-side/(.20+f*.25),0.,1.)*(1.-f/3.3)*lamps[k].w;}}}
 else{if(a.g<.019)discard;float deep=quant(clamp(a.g*1.6,0.,1.),7.,b);vec3 shallow=vec3(.70,.661,.423),teal=vec3(.299,.573,.522),pool=vec3(.205,.419,.423);rgb=mix(mix(shallow,teal,min(1.,deep*2.5)),pool,max(0.,(deep-.4)/.6));
 vec2 flow=d.rg;vec2 pp=p-vec2(.041,.062)*t;vec2 pattern=vec2(pp.x*.96+pp.y*.28,pp.y*2.7-pp.x*.48);float patches=noise(p*.76+t*.018);float phase=dot(p,normalize(flow+vec2(.08,.14)))*.65;float wave=sin(pattern.y*7.8+4.9*noise(pattern*.86)+2.4*noise(p*.89)-t*(1.05+min(1.,length(flow)))-phase);float slick=noise(pattern*vec2(2.8,2.1)+t*.08);
@@ -192,7 +197,7 @@ else{shadow=shade(n);
 if(M>1.5&&M<2.5){vec2 wood=abs(n.z)>.6?vec2(P.x,P.y):abs(n.x)>.6?vec2(P.z,P.y):(abs(abs(P.x)-16.24)<abs(abs(P.z)-10.91)?vec2(P.z,P.x):vec2(P.x,P.z));float grainline=noise(vec2(wood.x*.94,wood.y*16.));float ring=sin(wood.y*48.+noise(wood*vec2(.24,6.))*7.);rgb*=.88+.18*step(.42,grainline)+.10*step(.77,ring)-.13*step(.82,grainline);}
 if(M>2.5&&M<3.5){float blades=hash(floor(p*9.));rgb=mix(vec3(.34,.393,.199),vec3(.55,.57,.274),quant(clamp(.26+.37*noise(p*.27)+.23*m+.14*step(.78,blades),0.,1.),6.,b));rgb+=(blades>.92?.045:blades<.08?-.033:0.);rgb*=.96+.10*noise(p*.15);}
 if(M>3.5&&M<4.5){vec2 tiles=p*vec2(.45,.65);tiles.x+=mod(floor(tiles.y),2.)*.5;vec2 f=fract(tiles);rgb*=.88+hash(floor(tiles))*.15;rgb*=min(min(f.x,1.-f.x),min(f.y,1.-f.y))<.022?.64:1.;rgb+=(grain-.5)*.06;}
-float lighting=dot(n,sun);float band=lighting>.50?1.06:lighting>-.06?.88:.66;rgb*=band;rgb*=mix(vec3(.65,.66,.69),vec3(1.),(shadow-.43)/.57);if(M>4.5&&M<5.5)rgb=C*(.86+.14*b);
+float lighting=dot(n,sun);float band=lighting>.50?1.06:lighting>-.06?.88:.66;rgb*=band;rgb*=mix(vec3(1.),mix(vec3(.69,.68,.68),vec3(1.),(shadow-.43)/.57),smoothstep(.04,.34,lighting));if(M>4.5&&M<5.5)rgb=C*(.86+.14*b);
 strength=(M<1.5?1.:0.);}
 rgb=floor(clamp(rgb,0.,1.)*64.+b)/64.;col=vec4(rgb,1);edge=vec4(n*.5+.5,strength>.5?clamp(.98-length(P-eye)*.009,.05,.99):0.);}
 `;
@@ -350,13 +355,13 @@ function draw(g,m=I){gl.uniformMatrix4fv(U.model,false,m);gl.bindVertexArray(g.v
 function objects(includeWater){gl.uniform1i(U.mode,1);draw(grid);gl.uniform1i(U.mode,0);draw(environment);for(let [g,m] of sceneItems)draw(g,m);if(includeWater){gl.uniform1i(U.mode,2);draw(grid)}}
 let shadowTick=0;
 function render(dt){resize();cameraStep(dt);modelParts();waterDetails();gl.useProgram(sceneP);gl.uniformMatrix4fv(U.lightVP,false,lightMatrix);gl.uniform1i(U.field,0);gl.uniform1i(U.detail,1);gl.uniform1i(U.shadowMap,2);bindTex(0,fieldTex);bindTex(1,detailT);gl.uniform3fv(U.eye,cameraEye);gl.uniform1f(U.t,time);gl.uniform4fv(U.lamps,lampArray);gl.enable(gl.DEPTH_TEST);
- if(shadowTick++%(resHeight<270?3:2)===0){bindTex(2,fieldTex);gl.bindFramebuffer(gl.FRAMEBUFFER,shadowFB);gl.viewport(0,0,shadowSize,shadowSize);gl.clear(gl.DEPTH_BUFFER_BIT);gl.uniform1i(U.pass,1);gl.uniformMatrix4fv(U.vp,false,lightMatrix);objects(false)}
+ if(shadowTick++%(resHeight<270?3:2)===0){bindTex(2,fieldTex);gl.bindFramebuffer(gl.FRAMEBUFFER,shadowFB);gl.viewport(0,0,shadowSize,shadowSize);gl.clear(gl.DEPTH_BUFFER_BIT);gl.uniform1i(U.pass,1);gl.uniformMatrix4fv(U.vp,false,lightMatrix);gl.enable(gl.POLYGON_OFFSET_FILL);gl.polygonOffset(1.3,2);objects(false);gl.disable(gl.POLYGON_OFFSET_FILL)}
  gl.bindFramebuffer(gl.FRAMEBUFFER,mainFB);gl.viewport(0,0,renderW,renderH);gl.clearBufferfv(gl.COLOR,0,[.70,.75,.60,1]);gl.clearBufferfv(gl.COLOR,1,[.5,.5,.5,0]);gl.clear(gl.DEPTH_BUFFER_BIT);
  gl.drawBuffers([gl.COLOR_ATTACHMENT0]);gl.disable(gl.DEPTH_TEST);gl.useProgram(skyP);gl.bindVertexArray(null);gl.drawArrays(gl.TRIANGLES,0,3);gl.drawBuffers([gl.COLOR_ATTACHMENT0,gl.COLOR_ATTACHMENT1]);gl.enable(gl.DEPTH_TEST);gl.useProgram(sceneP);gl.uniform1i(U.pass,0);gl.uniformMatrix4fv(U.vp,false,VP);bindTex(2,shadowTex);objects(true);
  gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.disable(gl.DEPTH_TEST);gl.useProgram(finishP);bindTex(0,colorTex);bindTex(1,edgeTex);gl.uniform1i(loc(finishP,'image'),0);gl.uniform1i(loc(finishP,'edges'),1);gl.bindVertexArray(null);gl.drawArrays(gl.TRIANGLES,0,3)}
 // Low-resolution, hand-plotted transmitter graphics; text uses a separate HUD canvas.
 function brand(){const c=$('wordmark'),g=c.getContext('2d');g.clearRect(0,0,155,32);g.fillStyle='#f6ac57';const mark=['000011000','000111100','001111110','011001111','110000011','001100000','011111000','110011100','000001110'];for(let y=0;y<mark.length;y++)for(let x=0;x<9;x++)if(mark[y][x]==='1')g.fillRect(x*3,2+y*3,3,3);
- const glyphs={S:['11111','11000','11000','11111','00011','00011','11111'],A:['01110','11011','11011','11111','11011','11011','11011'],N:['11011','11011','11111','11111','11111','11011','11011'],D:['11110','11011','11011','11011','11011','11011','11110'],P:['11110','11011','11011','11110','11000','11000','11000'],I:['111','010','010','010','010','010','111'],T:['11111','11111','00100','00100','00100','00100','00100']};let left=34;g.fillStyle='#f5eacb';for(let l of 'SANDPIT'){let a=glyphs[l];for(let y=0;y<7;y++)for(let x=0;x<a[y].length;x++)if(a[y][x]==='1')g.fillRect(left+x*3,5+y*3,3,3);left+=a[0].length*3+3}}
+ const glyphs={S:['11111','11000','11000','11111','00011','00011','11111'],A:['01110','11011','11011','11111','11011','11011','11011'],N:['10001','11001','11001','10101','10011','10011','10001'],D:['11110','11011','11011','11011','11011','11011','11110'],P:['11110','11011','11011','11110','11000','11000','11000'],I:['111','010','010','010','010','010','111'],T:['11111','11111','00100','00100','00100','00100','00100']};let left=34;g.fillStyle='#f5eacb';for(let l of 'SANDPIT'){let a=glyphs[l];for(let y=0;y<7;y++)for(let x=0;x<a[y].length;x++)if(a[y][x]==='1')g.fillRect(left+x*3,5+y*3,3,3);left+=a[0].length*3+3}}
 function mini(canvas,type){canvas.width=80;canvas.height=40;let c=canvas.getContext('2d'),ink='#242823',mid=['#c88b3d','#c97945','#778967','#c59634'][type],hi=['#ecc065','#edac70','#adbd8a','#f1c666'][type];
  function r(x,y,w,h,col){c.fillStyle=col;c.fillRect(x,y,w,h)}function p(arr,col){c.fillStyle=col;c.beginPath();arr.forEach(([x,y],i)=>i?c.lineTo(x,y):c.moveTo(x,y));c.closePath();c.fill()}
  function tire(x,y,k=6){p([[x-k+2,y-k],[x+k-2,y-k],[x+k,y-k+2],[x+k,y+k-2],[x+k-2,y+k],[x-k+2,y+k],[x-k,y+k-2],[x-k,y-k+2]],'#141b19');r(x-3,y-3,6,6,'#686b59');r(x-1,y-1,3,3,'#aaa88d');r(x-3,y-k,k,1,'#52564a')}
@@ -381,7 +386,7 @@ function markDraw(){let ctx=hudCanvas('markers');if(!ctx||!VP)return;let [g,W,H]
  function label(x,y,z,txt,color,offset=0){let [u,v,q]=project(x,y,z);if(q<.04||Math.abs(u)>.96||Math.abs(v)>.90)return;if(view===2){let a=vehicles[active],b=project(a.x,a.y+1.35,a.z);if(q>b[2]&&Math.abs(u-b[0])<.24&&Math.abs(v-b[1])<.39)return;}let xx=(u*.5+.5)*W,yy=(.5-v*.5)*H;g.font=(small?8:10)+'px "DM Mono",monospace';let w=Math.ceil(g.measureText(txt).width)+13,side=xx>W-w-8?-1:1;
  let ax=xx+side*10,ay=yy-(small?11:19)+offset;
  g.strokeStyle=color;g.lineWidth=1;g.beginPath();g.moveTo(xx,yy);g.lineTo(xx,ay+5);g.lineTo(ax,ay+5);g.stroke();g.fillStyle='#2a3028ed';g.fillRect(side>0?ax:ax-w,ay-4,w,16);g.fillStyle=color;g.fillRect(side>0?ax:ax-2,ay-4,2,16);textAt(g,txt,side>0?ax+7:ax-6,ay+7,small?8:10,color,side>0?'left':'right')}
- if(markersOn){label(source[0],2.9,source[1],(small?'':'INLET  ')+flow.toFixed(2)+' L/s','#e9cea0');for(let j=0;j<2;j++){let [x,z]=basins[j];label(x+1.62,sample(h,x+1.62,z-.85)+.88,z-.85,(small?'':'BASIN ')+(j?'B':'A')+'  '+Math.round(basinFill[j]*100)+'%','#bed5b6')}
+ if(markersOn){label(source[0],2.9,source[1],(small?'':'INLET  ')+flow.toFixed(2)+' L/s','#e9cea0');for(let j=0;j<2;j++){let [x,z]=basins[j];label(x+1.62,sample(h,x+1.62,z-.85)+.88,z-.85,(small?'':'BASIN ')+(j?'B':'A')+'  '+(scenario===1&&j===1&&basinFill[j]>.94?'FLOOD':Math.round(basinFill[j]*100)+'%'),scenario===1&&j===1&&basinFill[j]>.94?'#ffb175':'#bed5b6')}
  let warn=campDepth>.13;label(camp[0]-1.12,sample(h,...camp)+1.2,camp[1]-.3,warn?'CAMP FLOOD':'CAMP  '+(small?'○':'DRY'),warn?'#ffc17e':'#e9cfa2');if(scenario===1){label(levee[0],sample(h,...levee)+.2,levee[1],'LEVEE  '+(leakLevel>.12?'LEAK':'HOLD'),'#f1b47a');label(spill[0],sample(h,...spill)+.25,spill[1],'CUT  '+Math.round(clamp(trench/.32,0,1)*100)+'%','#e5c483')}}
  if(view!==2){let v=vehicles[active],[u,b,q]=project(v.x,v.y+2.99,v.z);if(q>.1){let x=(u*.5+.5)*W,y=(.5-b*.5)*H;g.fillStyle='#ffb35e';g.beginPath();g.moveTo(x-4,y-6);g.lineTo(x+4,y-6);g.lineTo(x,y);g.fill()}}
 }
@@ -391,7 +396,7 @@ function hintUpdate(){document.body.classList.toggle('touchMode',inputType==='to
 function chooseUnit(i){const old=vehicles[active];old.speed=old.turn=0;active=(i+4)%4;document.querySelectorAll('.unit').forEach((b,j)=>{b.classList.toggle('active',j===active);b.setAttribute('aria-pressed',String(j===active))});hintUpdate()}
 function changeView(v=(view+1)%3){view=v;$('camId').textContent='CAM 0'+(v+1);$('camName').textContent=['DIORAMA','PIT RIM','CHASE'][v];hintUpdate()}
 function toggleMarkers(){markersOn=!markersOn;$('markBtn').innerHTML='<span>⌖</span> MARKERS '+(markersOn?'ON':'OFF')}
-function showProgram(id){initYard(id);if(environment){gl.deleteVertexArray(environment.vao);gl.deleteBuffer(environment.buf)}environment=makeEnvironment();uploadFields();particles=[];chooseUnit(0);camInit=false;changeView(0);$('programNum').textContent=id===2?'OPEN FIELD   /   FREE PLAY':'FIELD PROGRAM   /   0'+(id+1);$('programName').textContent=titles[id];$('mission').textContent=briefs[id];$('dialog').classList.remove('open');shadowTick=0}
+function showProgram(id){initYard(id);noticeTime=0;$('notice').style.display='none';if(environment){gl.deleteVertexArray(environment.vao);gl.deleteBuffer(environment.buf)}environment=makeEnvironment();uploadFields();particles=[];chooseUnit(0);camInit=false;changeView(0);$('programNum').textContent=id===2?'OPEN FIELD   /   FREE PLAY':'FIELD PROGRAM   /   0'+(id+1);$('programName').textContent=titles[id];$('mission').textContent=briefs[id];$('dialog').classList.remove('open');shadowTick=0}
 function modal(kind){let guide=kind==='guide';$('dialogTitle').textContent=guide?'Field guide':'Field programs';let b=$('dialogBody');if(guide){b.innerHTML='<p>Wet a bank and it will hold a steeper cut. A thin wall will seep and wash out. Drive over new fill to pack it down.</p><ul><li><strong>Bulldozer</strong> · Lower the blade with K and drive forward. J/L tilt the cutting edge.</li><li><strong>Loader</strong> · Drive into sand with the bucket low. Curl with L, lift with I, then hold J to dump.</li><li><strong>Dump truck</strong> · Park beside a raised bucket to receive fill. Hold I to tip the bed, K to lower it.</li><li><strong>Excavator</strong> · I/K raise and lower, J/L swing, Q/E retract and extend, Z/X open and curl. Raise fully or open to dump.</li></ul><p>Space cycles cameras. Drag the yard in rim view to orbit with Alt or a second finger. F feathers hydraulics, M toggles markers, R recovers the active unit with its load.</p><p>On a controller use D-pad for reach and curl, triggers for throttle and reverse, X for fine control. On touch, Fine changes the excavator’s right stick to reach and curl.</p>'}
  else{b.innerHTML='';titles.forEach((t,i)=>{const a=document.createElement('button');a.className='choice'+(scenario===i?' selected':'');a.innerHTML=(i===2?'∞':'0'+(i+1))+' &nbsp; '+t+'<small>'+briefs[i]+'</small>';a.onclick=()=>{if(scenario!==i){showProgram(i);announce('Field program loaded')}else closeModal()};b.appendChild(a)});
  let msg=document.createElement('p');msg.textContent=scenario===0?'Targets · A '+Math.round(basinFill[0]*100)+'% / B '+Math.round(basinFill[1]*100)+'% · Camp '+(campDepth>.13?'flooded':'dry'):scenario===1?'Spillway cut '+Math.round(clamp(trench/.32,0,1)*100)+'% · Fill hauled '+Math.round(clamp(haul/.38,0,1)*100)+'% · Levee '+(leakLevel>.19?'leaking':'holding'):'Weather and inlet controls';b.appendChild(msg);
@@ -448,7 +453,7 @@ document.fonts?.ready.then(()=>{markDraw();gauges();radar()});requestAnimationFr
 // Explicit opt-in diagnostics drive the same simulation, input, and draw paths as play.
 if(new URLSearchParams(location.search).has('qa'))window.sandpitQA={
  pause(s=true){qaPause=s},step(n,dt=1/30){for(let i=0;i<n;i++){time+=dt;physics(dt,inputs());particlesStep(dt)}},draw(n=1){uploadFields();resize();for(let i=1;i<n;i++)cameraStep(1/30);render(1/30);markDraw();gauges();radar()},
- scenario:showProgram,view:changeView,unit:chooseUnit,input:inputs,stats(){return{seconds:time,tick,scenario,active,view,initialSand,sand:sandTotal(),waterError:sum(w)*AREA-startWater-waterIn+waterOut,finite:[h,w,silt,wet,qx,qz].every(a=>a.every(Number.isFinite)),minWater:Math.min(...w),minSilt:Math.min(...silt),peakFlow,breaches,worked,haul,basinFill,campDepth,simHz,resHeight,vehicles:vehicles.map(v=>({...v})),glError:gl.getError()}},
+ scenario:showProgram,view:changeView,unit:chooseUnit,input:inputs,stats(){return{goal,seconds:time,tick,scenario,active,view,initialSand,sand:sandTotal(),waterError:sum(w)*AREA-startWater-waterIn+waterOut,finite:[h,w,silt,wet,qx,qz].every(a=>a.every(Number.isFinite)),minWater:Math.min(...w),minSilt:Math.min(...silt),peakFlow,breaches,worked,haul,basinFill,campDepth,simHz,resHeight,vehicles:vehicles.map(v=>({...v})),glError:gl.getError()}},
  fixture(fn){return fn({h,w,silt,wet,fresh,qx,qz,pack,vehicles,basins,source,levee,at,footprint,deposit,remove,tipPoint,region,sample,AREA,NX,NZ,DX,initYard,setFlow(v){flow=v},setRain(v){rain=v}})}
 };
 </script></body></html>

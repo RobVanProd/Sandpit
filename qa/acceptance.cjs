@@ -30,6 +30,17 @@ const {chromium}=require('playwright-core'),fs=require('fs'),path=require('path'
  await page.setViewportSize({width:430,height:850});await draw(20);const cd=await page.context().newCDPSession(page);await cd.send('Emulation.setTouchEmulationEnabled',{enabled:true,maxTouchPoints:5});await page.touchscreen.tap(220,350);await draw();
  const rect=async sel=>page.locator(sel).boundingBox();const a=await rect('#leftStick'),b=await rect('#rightStick');let pnt=(r,id)=>({x:r.x+r.width/2,y:r.y+r.height/2,id,radiusX:6,radiusY:6});let pa=pnt(a,1),pb=pnt(b,2);
  await cd.send('Input.dispatchTouchEvent',{type:'touchStart',touchPoints:[pa,pb]});pa.y-=30;pb.y+=24;pb.x+=10;await cd.send('Input.dispatchTouchEvent',{type:'touchMove',touchPoints:[pa,pb]});const cmd=await E(()=>sandpitQA.input());assert.ok(cmd.drive>.2&&cmd.hy<-.15);await step(30);await shot('10-mobile-dual-stick');await cd.send('Input.dispatchTouchEvent',{type:'touchEnd',touchPoints:[]});await page.locator('#swapTouch').tap();await page.locator('#fineTouch').tap();await stats('multitouch');
- assert.deepEqual(errors,[]);fs.writeFileSync('captures/report.json',JSON.stringify({reports,proof,errors,touch:cmd},null,2));console.log('Headless browser acceptance passed.');
+
+ // Hydrology acceptance fixture: move soil into two berms and a spoil pile,
+ // while leaving water, inlet, sediment and payloads completely untouched.
+ await page.setViewportSize({width:1360,height:830});await E(()=>sandpitQA.scenario(0));await page.keyboard.press('1');
+ const earthworks=await E(()=>sandpitQA.fixture(({h,NX,NZ,DX,AREA,basins,deposit})=>{
+   const halfZ=(NZ-1)*DX/2,river=z=>-7.8+3.2*Math.sin((z+halfZ)*.33)+.39*(z+halfZ);
+   const line=(earth,x,z,bx,bz,width,end,bend)=>{let ax=river(-3.5),az=-3.5,dx=bx-ax,dz=bz-az,u=Math.max(0,Math.min(1,((x-ax)*dx+(z-az)*dz)/(dx*dx+dz*dz))),d=Math.hypot(x-ax-dx*u,z-az-dz*u-bend*Math.sin(u*Math.PI*2));return earth+Math.exp(-((d/width)**3))*(Math.min(earth,-.20+(end+.2)*u)-earth)};
+   let cut=0;for(let k=0;k<h.length;k++){let x=(k%NX)*DX-16,z=Math.floor(k/NX)*DX-halfZ,y=h[k];y=line(y,x,z,8,-5,.95,-.55,.19);y=line(y,x,z,6.3,5,.97,-.65,-.54);for(let [cx,cz,r] of basins)y=Math.min(y,y+(-.64-y)*Math.exp(-((Math.hypot(x-cx,z-cz)/(r*.87))**4)));cut+=h[k]-y;h[k]=y}
+   const mold=Math.min(520,cut*.65);deposit(river(-1.6),-1.6,2.78,1.07,0,mold*.77);deposit(river(4.1),4.1,2.8,1.16,0,mold*.23);deposit(12,7,3.9,3.2,0,cut-mold);return {excavatedLitres:cut*AREA,bermLitres:mold*AREA}
+ }));let won=false;for(let k=0;k<50;k++){await step(120);if(await E(()=>sandpitQA.stats().goal)){won=true;break}}
+ console.log('Diverted creek:',earthworks);await stats('two-basin diversion');assert.ok(won,'Both basins fill while camp stays dry');await E(()=>sandpitQA.view(1));await draw(35);await shot('11-completed-diversion');
+ assert.deepEqual(errors,[]);fs.writeFileSync('captures/report.json',JSON.stringify({reports,proof,errors,touch:cmd,earthworks},null,2));console.log('Headless browser acceptance passed.');
  await browser.close();
 })().catch(err=>{console.error(err);process.exit(1)});
