@@ -1581,11 +1581,17 @@ function soilSlopeStep(dt) {
       function rigFrame(r) {
         return joint(eye4(), r.x, r.y + 0.012, r.z, r.pitch, r.yaw, r.roll);
       }
+      function loaderFrontYaw(r) {
+        return -r.steer * 0.29;
+      }
+      function loaderRearYaw(r) {
+        return r.steer * 0.22;
+      }
       function loaderFront(r, base) {
-        return joint(base, 0, 0, 0.02, 0, r.steer * 0.29);
+        return joint(base, 0, 0, 0.02, 0, loaderFrontYaw(r));
       }
       function loaderRear(r, base) {
-        return joint(base, 0, 0, -0.04, 0, -r.steer * 0.22);
+        return joint(base, 0, 0, -0.04, 0, loaderRearYaw(r));
       }
       function excavatorHouse(r, base) {
         return joint(base, 0, 0.81, 0, 0, r.house);
@@ -1818,7 +1824,9 @@ function soilSlopeStep(dt) {
           const incline = n === 2 ? -r.lift * 1.12 + r.pitch : n === 0 ? 0 : 0.38 - 0.58 * r.curl,
             adhesion = 4 * r.cargo.moisture * (1 - r.cargo.moisture),
             shear = Math.sin(incline) - 0.05 * r.speed,
-            sideShear = -Math.sin(r.roll) + r.steer * r.speed * 0.08,
+            // Cargo shifts to the outside of the turn. Wheels reverse their
+            // yaw in reverse, while tracks pivot in the same direction.
+            sideShear = -Math.sin(r.roll) + r.steer * (n === 1 || n === 2 ? Math.abs(r.speed) : r.speed) * 0.08,
             hold = 0.22 + 0.23 * adhesion,
             rate = dt * (4.2 - 2.5 * adhesion);
           if (Math.abs(shear) > hold) r.cargo.shift = mix(r.cargo.shift, clamp(shear, -0.7, 0.48), Math.min(1, rate));
@@ -2061,7 +2069,8 @@ function soilSlopeStep(dt) {
         const steer = mix(r.steer, c.turn, Math.min(1, dt * 6)),
           tracked = n === 0 || n === 3,
           turnRate = tracked ? 1.25 : Math.abs(r.speed) * 0.6,
-          yaw = r.yaw + steer * turnRate * dt * (tracked ? 1 : Math.sign(r.speed)) * feather,
+          // A positive driver command is right, toward -X when heading +Z.
+          yaw = r.yaw - steer * turnRate * dt * (tracked ? 1 : Math.sign(r.speed)) * feather,
           nx = clamp(r.x + Math.sin(yaw) * r.speed * dt, -W / 2 + 1.5, W / 2 - 1.5),
           nz = clamp(r.z + Math.cos(yaw) * r.speed * dt, -D / 2 + 1.5, D / 2 - 1.5);
         const next = { ...r, x: nx, z: nz, yaw, steer };
@@ -2362,7 +2371,7 @@ function soilSlopeStep(dt) {
         return p;
       }
       const common =
-        "uniform mat4 VP;uniform mat4 sunVP;uniform sampler2D field;uniform float time;out vec3 P;out vec3 N;out vec3 C;flat out int M;out vec4 SP;out vec4 F;out vec2 uv;";
+        "uniform mat4 VP;uniform mat4 sunVP;uniform highp sampler2D field;uniform float time;out vec3 P;out vec3 N;out vec3 C;flat out int M;out vec4 SP;out vec4 F;out vec2 uv;";
       const meshVS =
         "layout(location=0) in vec3 pos;layout(location=1) in vec3 nor;layout(location=2) in vec3 col;layout(location=3) in float mat;" +
         common +
@@ -2375,13 +2384,43 @@ void main(){ivec2 k=ivec2(grid);F=texelFetch(field,k,0);uv=grid/vec2(127,95);P=v
 if(liquid==1){if(F.g<.018){float level=0.,count=0.;ivec2 hi=ivec2(127,95);ivec2 ofst[4]=ivec2[4](ivec2(1,0),ivec2(-1,0),ivec2(0,1),ivec2(0,-1));for(int i=0;i<4;i++){vec2 nh=texelFetch(field,clamp(k+ofst[i],ivec2(0),hi),0).rg;if(nh.y>.018){level+=nh.x+nh.y;count+=1.;}}F.g=count>0.?min(.014,level/count-F.r):-.04;}P.y+=F.g+.009+min(.007,max(0.,F.g)*.02)*sin(P.x*4.+P.z*3.+time*2.3);}
 N=vec3(0,1,0);C=vec3(1);M=liquid==1?9:8;SP=sunVP*vec4(P,1);gl_Position=VP*vec4(P,1);}`;
       const fs = `in vec3 P;in vec3 N;in vec3 C;flat in int M;in vec4 SP;in vec4 F;in vec2 uv;out vec4 frag;
-uniform vec3 eye;uniform sampler2D shadowMap;uniform sampler2D field;uniform float time;uniform sampler2D flowMap,soilMap;uniform vec3 beams[8];
+uniform vec3 eye;uniform highp sampler2D shadowMap;uniform highp sampler2D field;uniform float time;uniform highp sampler2D flowMap;uniform sampler2D soilMap;uniform vec3 beams[8];
 float hash(vec2 p){vec3 p3=fract(vec3(p.xyx)*.1031);p3+=dot(p3,p3.yzx+33.33);return fract((p3.x+p3.y)*p3.z);}
 float bayer(){int x=int(gl_FragCoord.x)&3,y=int(gl_FragCoord.y)&3;int b[16]=int[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);return (float(b[x+4*y])+.5)/16.;}
+float shadowTap(ivec2 texel, ivec2 size, float receiverDepth) {
+  if (any(lessThan(texel, ivec2(0))) || any(greaterThanEqual(texel, size))) return 1.;
+  return step(receiverDepth, texelFetch(shadowMap, texel, 0).r);
+}
+float shadowVisibility(vec4 clip, float terrainRoughness) {
+  vec3 sc = clip.xyz / clip.w * .5 + .5;
+  ivec2 size = textureSize(shadowMap, 0);
+  vec2 texelPosition = sc.xy * vec2(size) - .5;
+
+  // Fit the actual receiver triangle in light space, with XY in shadow texels.
+  vec3 receiver = vec3(texelPosition, sc.z);
+  vec3 plane = cross(dFdx(receiver), dFdy(receiver));
+  if (any(lessThan(sc, vec3(0.))) || any(greaterThanEqual(sc, vec3(1.)))) return 1.;
+  float safeZ = sign(plane.z) * max(abs(plane.z), 1e-7);
+  vec2 slope = vec2(0.);
+  if (safeZ != 0.) slope = clamp(-plane.xy / safeZ, vec2(-.008), vec2(.008));
+
+  // Compare each tap against the plane at that texel's center. Blending
+  // coverage across just the four adjacent texels keeps the contact edge sharp.
+  ivec2 corner = ivec2(floor(texelPosition));
+  vec2 f = fract(texelPosition);
+  // A terrain tap can land across a crease onto a different receiver plane.
+  float bias = (.04 + .90 * terrainRoughness) / float(size.x);
+  float depth = sc.z - dot(slope, f) - max(.000015, bias);
+  float top = mix(shadowTap(corner, size, depth),
+                  shadowTap(corner + ivec2(1, 0), size, depth + slope.x), f.x);
+  float bottom = mix(shadowTap(corner + ivec2(0, 1), size, depth + slope.y),
+                     shadowTap(corner + ivec2(1, 1), size, depth + slope.x + slope.y), f.x);
+  return mix(top, bottom, f.y);
+}
 void main(){float d=bayer();vec3 base=C,n=normalize(N);float amb=0.;vec3 sun=normalize(vec3(-.79,.70,-.45));
-vec3 sc=SP.xyz/SP.w*.5+.5;float sh=1.;if(all(greaterThan(sc.xy,vec2(0)))&&all(lessThan(sc.xy,vec2(1))))sh=step(sc.z-.0014,texture(shadowMap,sc.xy).r);
 if(M==8){ivec2 k=clamp(ivec2(uv*vec2(127,95)+.5),ivec2(1),ivec2(126,94));float hx=texelFetch(field,k+ivec2(1,0),0).r-texelFetch(field,k-ivec2(1,0),0).r;float hz=texelFetch(field,k+ivec2(0,1),0).r-texelFetch(field,k-ivec2(0,1),0).r;n=normalize(vec3(-hx/.425,1.,-hz/.421));}else if(M==9){vec3 nn=cross(dFdx(P),dFdy(P));n=normalize(nn)*sign(nn.y);}
 float nd=dot(n,sun);
+float sh=shadowVisibility(SP,M==8?smoothstep(.015,.35,1.-n.y):0.);
 if(M==8){vec4 soil=texture(soilMap,uv);float wet=clamp(F.b*.84+F.g*.9,0.,1.);
 float cut=smoothstep(.10,.54,1.-n.y),stratum=step(.83,fract(P.y*8.2+.12*sin(P.x*2.5+P.z)))*cut;
 base=mix(vec3(.90,.73,.47),vec3(.565,.444,.302),floor(wet*5.+d)/5.);
@@ -2737,6 +2776,8 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           verts = [];
           return;
         }
+        shadowDirty = true;
+        if (m === yardMesh || m === rimMesh) staticSunReady = false;
         gl.bindBuffer(gl.ARRAY_BUFFER, m.buf);
         gl.bufferData(
           gl.ARRAY_BUFFER,
@@ -2747,6 +2788,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         verts = [];
       }
       const yardMesh = mesh(),
+        rimMesh = mesh(),
         stoneMesh = mesh(true),
         rigMeshes = [mesh(true), mesh(true), mesh(true), mesh(true)],
         looseMesh = mesh(true),
@@ -2924,6 +2966,10 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         flowerPot(16.1, -6.8, 1.25);
         flowerPot(18, -5.6, 0.76);
         flowerPot(-18.8, -9.8, 1.1);
+        // Keep the retaining walls separate so they receive the current shadow map
+        // even when the rest of the garden's color and depth are reused.
+        const gardenVertices = verts;
+        verts = [];
         // Retaining walls: separate cedar boards, exposed dark gaps, raised smooth cap rails.
         for (let side of [-1, 1]) {
           for (let k = 0; k < 3; k++) {
@@ -2946,6 +2992,8 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         }
         for (let x of [-1, 1])
           for (let z of [-1, 1]) corner(x * (W / 2 + 0.26), z * (D / 2 + 0.26));
+        upload(rimMesh);
+        verts = gardenVertices;
         // Coiled woven hose and high copper standpipe with a red handwheel.
         let coil = [];
         for (let j = 0; j < 84; j++) {
@@ -3252,15 +3300,14 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
       const paint = ["#efb541", "#d5a34d", "#c78155", "#e9a041"],
         bright = ["#ffd269", "#f0ca6b", "#ebad65", "#ffcd60"],
         accent = ["#a5792d", "#947229", "#925637", "#a4722b"];
-      function wheel(x, z, r, travel, tracked = false) {
-        let sg = Math.sign(x),
-          y = tracked ? 0.37 : r;
+      function wheel(x, z, r, travel, tracked = false, side = Math.sign(x)) {
+        const y = tracked ? 0.37 : r;
         beam([x - 0.22, y, z], [x + 0.22, y, z], r, r, "#353c36", 10);
-        const outer = x + sg * 0.23;
-        beam([outer, y, z], [outer + sg * 0.036, y, z], r * 0.65, r * 0.65, "#737568", 10);
+        const outer = x + side * 0.23;
+        beam([outer, y, z], [outer + side * 0.036, y, z], r * 0.65, r * 0.65, "#737568", 10);
         beam(
-          [outer + sg * 0.044, y, z],
-          [outer + sg * 0.1, y, z],
+          [outer + side * 0.044, y, z],
+          [outer + side * 0.1, y, z],
           r * 0.39,
           r * 0.39,
           "#c19c55",
@@ -3274,7 +3321,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             );
           if (k % 2 === 0)
             box(
-              outer + sg * 0.065,
+              outer + side * 0.065,
               y + r * 0.49 * Math.cos(a),
               z + r * 0.49 * Math.sin(a),
               0.06,
@@ -3444,13 +3491,13 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             local(0, 0.14 + r.lift * 1.0, 1.42, -0.09, 0, (r.curl - 0.5) * 0.32, () => {
               box(0, 0.37, 0, 2.22, 0.67, 0.18, p);
               box(0, 0.06, 0.13, 2.27, 0.13, 0.27, "#b8ba9f");
-              box(0, 0.7, 0.025, 2.22, 0.085, 0.22, hi);
+              box(0, 0.7, 0.025, 2.24, 0.085, 0.22, hi);
               for (let s of [-1, 1]) box(s * 1.07, 0.34, 0.1, 0.11, 0.58, 0.31, ac);
               for (let k = -3; k <= 3; k++) box(k * 0.29, 0.086, 0.278, 0.062, 0.054, 0.02, iron);
             });
           }
           if (n === 1) {
-            local(0, 0, -0.04, 0, -r.steer * 0.22, 0, () => {
+            local(0, 0, -0.04, 0, loaderRearYaw(r), 0, () => {
               for (let x of [-0.7, 0.7]) wheel(x, -0.72, 0.46, r.travel);
               box(0, 0.56, -0.44, 1.24, 0.36, 1.45, ac);
               box(0, 0.91, -0.8, 1.26, 0.44, 0.79, p);
@@ -3459,7 +3506,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
               for (let j = -2; j <= 2; j++) box(j * 0.19, 0.97, -1.21, 0.076, 0.24, 0.04, iron);
               antenna(0.5, 1.68, -0.56, r);
             });
-            local(0, 0, 0.02, 0, r.steer * 0.29, 0, () => {
+            local(0, 0, 0.02, 0, loaderFrontYaw(r), 0, () => {
               for (let x of [-0.7, 0.7]) wheel(x, 0.7, 0.46, r.travel);
               box(0, 0.62, 0.55, 1.12, 0.35, 1.22, p);
               const { pivot, tilt } = scoopPose(n, r);
@@ -3476,8 +3523,10 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             });
           }
           if (n === 2) {
-            for (let x of [-0.76, 0.76])
-              for (let z of [-0.97, -0.24, 0.94]) wheel(x, z, 0.41, r.travel);
+            for (let x of [-0.76, 0.76]) {
+              for (let z of [-0.97, -0.24]) wheel(x, z, 0.41, r.travel);
+              local(x, 0, 0.94, 0, -r.steer * 0.34, 0, () => wheel(0, 0, 0.41, r.travel, false, Math.sign(x)));
+            }
             box(0, 0.53, 0, 1.34, 0.3, 2.85, dark);
             box(0, 0.81, 0.83, 1.42, 0.44, 1.03, p);
             cab(0, 0.96, 0.89, 1.25, 0.65, 0.8, p, hi);
@@ -3565,6 +3614,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         swTags,
         swShadow,
         swStaticShadow,
+        swReceiverShadow,
         swBase,
         swBaseZ,
         swCamKey = "",
@@ -3575,11 +3625,8 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         swDepthOnly = false,
         swCol,
         swMat,
-        swIllum,
-        swShadowU,
-        swShadowV,
-        swSunZ;
-      const SD = 256,
+        swIllum;
+      const SD = 384,
         thresholds = [0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5];
       function swSetup(w, hh) {
         swImage = swCtx.createImageData(w, hh);
@@ -3597,10 +3644,17 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         out[2] = (m[2] * x + m[6] * y + m[10] * z + m[14]) * iw;
         out[3] = iw;
       }
+      function swLightProject(x, y, z, out) {
+        const m = sunVP;
+        // The rasterizer samples each texel at its center.
+        out[6] = ((m[0] * x + m[4] * y + m[8] * z + m[12]) * 0.5 + 0.5) * SD - 0.5;
+        out[7] = (0.5 - (m[1] * x + m[5] * y + m[9] * z + m[13]) * 0.5) * SD - 0.5;
+        out[8] = m[2] * x + m[6] * y + m[10] * z + m[14];
+      }
       const swA = [0, 0, 0, 0],
         swB = [0, 0, 0, 0],
         swC = [0, 0, 0, 0];
-      function swTri(a, b, c) {
+      function swTri(a, b, c, depthBias) {
         if (a[3] <= 0 || b[3] <= 0 || c[3] <= 0) return;
         let x0 = a[0],
           y0 = a[1],
@@ -3620,28 +3674,34 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           dv = (y2 - y0) * inv,
           su = (x2 - x1) * inv,
           sv = (x0 - x2) * inv,
+          baseDepth = c[2] + depthBias,
           z0 = a[2] - c[2],
           z1 = b[2] - c[2],
           color = swCol;
-        let shade = swIllum;
-        if (!swDepthOnly && swMat !== 9) {
-          let si = (swShadowU | 0) + (swShadowV | 0) * SD;
-          if (
-            swShadowU >= 0 &&
-            swShadowU < SD &&
-            swShadowV >= 0 &&
-            swShadowV < SD &&
-            swShadow[si] < swSunZ - (swMat === 8 ? 0.007 : 0.004)
-          )
-            shade *= 0.75;
-        }
-        let red = 0,
-          green = 0,
-          blue = 0;
-        if (!swDepthOnly) {
-          red = color[0] * shade + 14;
-          green = color[1] * shade + 10;
-          blue = color[2] * shade + 8;
+        const receivesShadow = !swDepthOnly && swMat !== 9;
+        let iw0, iw1, lu, lv, ld, lu0, lu1, lv0, lv1, ld0, ld1;
+        let slopeU = 0, slopeV = 0;
+        if (receivesShadow) {
+          const au = a[6] - c[6], av = a[7] - c[7], ad = a[8] - c[8];
+          const bu = b[6] - c[6], bv = b[7] - c[7], bd = b[8] - c[8];
+          const lightArea = au * bv - bu * av;
+          if (Math.abs(lightArea) > 0.001) {
+            // Match depth to the receiver plane so shallow slopes don't shadow themselves.
+            slopeU = clamp((ad * bv - bd * av) / lightArea, -0.012, 0.012);
+            slopeV = clamp((au * bd - bu * ad) / lightArea, -0.012, 0.012);
+          }
+          // Interpolate light coordinates divided by camera w, then restore the scale per pixel.
+          iw0 = a[3] - c[3];
+          iw1 = b[3] - c[3];
+          lu = c[6] * c[3];
+          lv = c[7] * c[3];
+          ld = c[8] * c[3];
+          lu0 = a[6] * a[3] - lu;
+          lu1 = b[6] * b[3] - lu;
+          lv0 = a[7] * a[3] - lv;
+          lv1 = b[7] * b[3] - lv;
+          ld0 = a[8] * a[3] - ld;
+          ld1 = b[8] * b[3] - ld;
         }
         const ground = !swDepthOnly && swMat === 8;
         const wx0 = ground ? a[4] - c[4] : 0, wx1 = ground ? b[4] - c[4] : 0;
@@ -3652,10 +3712,28 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           for (let x = l; x <= r; x++, u += du, v += dv) {
             if (u < 0 || v < 0 || u + v > 1) continue;
             const i = y * swWidth + x,
-              z = c[2] + u * z0 + v * z1;
+              z = baseDepth + u * z0 + v * z1;
             if (z >= swDepth[i]) continue;
             swDepth[i] = z;
             if (swDepthOnly) continue;
+            let shade = swIllum;
+            if (receivesShadow) {
+              const w = 1 / (c[3] + u * iw0 + v * iw1);
+              const sx = (lu + u * lu0 + v * lu1) * w;
+              const sy = (lv + u * lv0 + v * lv1) * w;
+              if (sx >= 0 && sy >= 0 && sx < SD - 1 && sy < SD - 1) {
+                const ix = sx | 0, iy = sy | 0;
+                const fx = sx - ix, fy = sy - iy;
+                const tap = iy * SD + ix;
+                const depth = (ld + u * ld0 + v * ld1) * w - 0.0009 - fx * slopeU - fy * slopeV;
+                // Blend four depth comparisons, keeping soft edges and tight contact shadows.
+                const upper = mix(+(swReceiverShadow[tap] < depth),
+                  +(swReceiverShadow[tap + 1] < depth + slopeU), fx);
+                const lower = mix(+(swReceiverShadow[tap + SD] < depth + slopeV),
+                  +(swReceiverShadow[tap + SD + 1] < depth + slopeU + slopeV), fx);
+                shade *= 1 - 0.29 * mix(upper, lower, fy);
+              }
+            }
             let bayer = thresholds[(x & 3) + 4 * (y & 3)] * 0.5,
               n = ((Math.imul(x, 374761393) ^ Math.imul(y, 668265263)) >>> 11) % 71,
               tex = 0;
@@ -3670,19 +3748,13 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
               tex =
                 (x + (y >> 1) + ((clock * 3) | 0)) % 23 < 5 && (y + (x >> 2)) % 9 === 0 ? 30 : 0;
             let k = i * 4;
-            swImage.data[k] = clamp(red + tex + bayer, 0, 255) & 248;
-            swImage.data[k + 1] = clamp(green + tex + bayer, 0, 255) & 248;
-            swImage.data[k + 2] = clamp(blue + tex + bayer, 0, 255) & 248;
+            swImage.data[k] = clamp(color[0] * shade + 14 + tex + bayer, 0, 255) & 248;
+            swImage.data[k + 1] = clamp(color[1] * shade + 10 + tex + bayer, 0, 255) & 248;
+            swImage.data[k + 2] = clamp(color[2] * shade + 8 + tex + bayer, 0, 255) & 248;
             swImage.data[k + 3] = 255;
             swTags[i] = swMat >= 4 && swMat <= 6 ? 1 : 0;
           }
         }
-      }
-      function swShade(x, y, z) {
-        let m = sunVP;
-        swShadowU = ((m[0] * x + m[4] * y + m[8] * z + m[12]) * 0.5 + 0.5) * SD;
-        swShadowV = (0.5 - (m[1] * x + m[5] * y + m[9] * z + m[13]) * 0.5) * SD;
-        swSunZ = m[2] * x + m[6] * y + m[10] * z + m[14];
       }
       function swMesh(mesh) {
         let f = mesh.data;
@@ -3696,17 +3768,18 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             let s = Math.max(-0.18, -0.69 * f[i + 3] + 0.62 * f[i + 4] - 0.4 * f[i + 5]);
             swIllum = swMat === 5 ? 0.94 : swMat === 11 ? .72 + s * .24 : 0.55 + s * 0.45;
             swCol = [f[i + 6] * 255, f[i + 7] * 255, f[i + 8] * 255];
-            swShade(
-              (f[i] + f[i + 10] + f[i + 20]) / 3,
-              (f[i + 1] + f[i + 11] + f[i + 21]) / 3,
-              (f[i + 2] + f[i + 12] + f[i + 22]) / 3,
-            );
+            swLightProject(f[i], f[i + 1], f[i + 2], swA);
+            swLightProject(f[i + 10], f[i + 11], f[i + 12], swB);
+            swLightProject(f[i + 20], f[i + 21], f[i + 22], swC);
           }
-          swTri(swA, swB, swC);
+          swTri(swA, swB, swC, 0);
         }
       }
       const swGrid = Array.from({ length: NN }, () => [0, 0, 0, 0]);
       function swTerrain(liquid) {
+        // Shift only terrain casters back by about one shadow texel. At a hill's
+        // crest the filter taps can cross onto a different plane and read as occluders.
+        const depthBias = swDepthOnly ? 0.0025 : 0;
         for (let v = 0; v < NZ + 1; v += 2)
           for (let u = 0; u < NX + 1; u += 2) {
             let j = Math.min(NZ - 1, v),
@@ -3717,6 +3790,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             if (!swDepthOnly && !liquid) {
               point[4] = (x + z * .38) * 16;
               point[5] = z * 16;
+              swLightProject(x, h[i], z, point);
             }
           }
         for (let j = 0; j < NZ - 1; j += 2)
@@ -3731,7 +3805,6 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
               let x = xx(i),
                 z = zz(i),
                 v = Math.min(1, wet[i] * 0.87);
-              swShade(x, h[i], z);
               if (liquid) {
                 swMat = 9;
                 let d = Math.min(1, w / 0.41);
@@ -3760,8 +3833,8 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
                 );
               }
             }
-            swTri(swGrid[i], swGrid[ir], swGrid[ib]);
-            swTri(swGrid[ir], swGrid[it], swGrid[ib]);
+            swTri(swGrid[i], swGrid[ir], swGrid[ib], depthBias);
+            swTri(swGrid[ir], swGrid[it], swGrid[ib], depthBias);
           }
       }
       function softwareFrame() {
@@ -3774,10 +3847,13 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         if (!swStaticShadow) {
           swDepth.fill(Infinity);
           swMesh(yardMesh);
+          swMesh(rimMesh);
           swStaticShadow = swDepth.slice();
         } else swDepth.set(swStaticShadow);
         swTerrain(false);
+        swMesh(stoneMesh);
         for (let m of rigMeshes) swMesh(m);
+        swMesh(looseMesh);
         swMesh(grainMesh);
         swWidth = w;
         swHeight = hh;
@@ -3800,11 +3876,15 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             swImage.data[k + 2] = 182 - t * 24;
             swImage.data[k + 3] = 255;
           }
+          // Cached scenery can only receive shadows from other static geometry.
+          swReceiverShadow = swStaticShadow;
           swMesh(yardMesh);
           swBaseZ = swZ.slice();
           swBase = swImage.data.slice();
           swCamKey = key;
         }
+        swReceiverShadow = swShadow;
+        swMesh(rimMesh);
         swTerrain(false);
         for (let m of rigMeshes) swMesh(m);
         swMesh(stoneMesh);
@@ -3839,7 +3919,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         stoneTime = -1;
       view = 1;
       let rimZoom = 1,
-        shadowClock = -1;
+        shadowDirty = true;
       function cameraPose(v) {
         let a = stageW / stageH,
           r = rigs[active];
@@ -3993,6 +4073,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           gl.bindTexture(gl.TEXTURE_2D, soilTex);
           gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, NX, NZ, gl.RGBA, gl.UNSIGNED_BYTE, soilPixels);
           fieldDirty = false;
+          shadowDirty = true;
         }
         updateEarthGrains();
         for (let i = 0; i < 4; i++) {
@@ -4036,7 +4117,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           if (frameNumber % 4 === 0 || panelDirty) drawPanel();
           return;
         }
-        const targetShadow = internalH < 245 ? 384 : internalH < 300 ? 640 : 1024;
+        const targetShadow = internalH < 245 ? 512 : internalH < 300 ? 768 : 1024;
         if (shadowSize !== targetShadow) {
           shadowSize = targetShadow;
           gl.activeTexture(gl.TEXTURE1);
@@ -4066,20 +4147,20 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             null,
           );
           staticSunReady = false;
-          shadowClock = -1;
+          shadowDirty = true;
         }
         gl.enable(gl.DEPTH_TEST);
         gl.depthMask(true);
-        if (clock !== shadowClock) {
-          shadowClock = clock;
+        if (shadowDirty) {
+          shadowDirty = false;
           gl.bindFramebuffer(gl.FRAMEBUFFER, sFBO);
           gl.viewport(0, 0, shadowSize, shadowSize);
           gl.enable(gl.POLYGON_OFFSET_FILL);
-          gl.polygonOffset(1.3, 1.4);
+          gl.polygonOffset(0, 2);
           if (!staticSunReady) {
             gl.bindFramebuffer(gl.FRAMEBUFFER, fixedSunFBO);
             gl.clear(gl.DEPTH_BUFFER_BIT);
-            objects(meshDepth, sunVP, [yardMesh]);
+            objects(meshDepth, sunVP, [yardMesh, rimMesh]);
             staticSunReady = true;
           }
           gl.bindFramebuffer(gl.READ_FRAMEBUFFER, fixedSunFBO);
@@ -4132,7 +4213,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         );
         gl.enable(gl.DEPTH_TEST);
         grid(terrainP, VP, 0);
-        objects(solidP, VP, [stoneMesh, ...rigMeshes, looseMesh, grainMesh]);
+        objects(solidP, VP, [rimMesh, stoneMesh, ...rigMeshes, looseMesh, grainMesh]);
         grid(terrainP, VP, 1);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.disable(gl.DEPTH_TEST);
@@ -4814,7 +4895,7 @@ function refreshSoilReadout(force=false) {
         resetWorld(+i);
         lastRig = [];
         looseTime = stoneTime = -1;
-        shadowClock = -1;
+        shadowDirty = true;
         accum = 0;
         panelDirty = true;
         $("intro").textContent = briefs[i];
@@ -5306,7 +5387,7 @@ function refreshSoilReadout(force=false) {
               cutDepth: cutDepth(),
               crest: crest(),
               initialCrest: peakDam,
-              verts: yardMesh.count,
+              verts: yardMesh.count + rimMesh.count,
               mass: sandMass(),
               grainVolume: grainClumps.reduce((sum, g) => sum + g.volume, 0),
               grainLimit,

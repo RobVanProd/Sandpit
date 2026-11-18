@@ -24,6 +24,9 @@ jobs:
           SANDPIT_CHROMIUM: /usr/bin/google-chrome
           SANDPIT_EVIDENCE: evidence/earthworks
         run: |
+          node verification/steering.cjs
+          node verification/shadows.cjs
+          node verification/soft-shadows.cjs
           node verification/contact.cjs
           node verification/soil.cjs
           node verification/hybrid-budget.cjs
