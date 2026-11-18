@@ -46,6 +46,8 @@ WebGL 2 draws the displaced surfaces, articulated machinery, shadow map and pixe
 
 Material and grain regressions are in [material.cjs](verification/material.cjs), [field-grains.cjs](verification/field-grains.cjs) and [earthwork-grains.cjs](verification/earthwork-grains.cjs). They exercise layer exposure, mass transfer and settling using the game code.
 
+The [steering test](verification/steering.cjs) checks which way each machine moves from the driver's seat. The [shadow test](verification/shadows.cjs) compares a moving blade's shadow with a freshly rendered reference, and the [before-and-after captures](verification/blade-shadows.png) show the moving blade in Field Simulator and the hillside in the Earthworks software renderer.
+
 The acceptance suite checks the final HTML directly with Chromium. It tests simultaneous touch inputs, Gamepad API mappings, both contracts, payload transfers, a natural levee breach and a seeded four-minute storm. Scenario fixtures stage machine positions. Digging, hydraulic transfers, water movement, truck travel and objective evaluation use the gameplay code.
 
 To repeat the tests with Python and Playwright installed, run:

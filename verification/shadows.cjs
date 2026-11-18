@@ -20,13 +20,18 @@ for (const [version, directory] of [['baseline', baselineRoot], ['current', root
   if (!directory) continue;
   for (const [game, file] of [['classic', 'index.html'], ['field', 'field/index.html']]) {
     if (selected && !('/' + version + '/' + game).includes(selected)) continue;
-    if (!fs.existsSync(path.join(directory, file))) continue;
     routes.set('/' + version + '/' + game, instrument(fs.readFileSync(path.join(directory, file), 'utf8'), game));
   }
 }
 
 function instrument(source, game) {
   const classic = game === 'classic';
+  const rateLimited = source.includes('let shadowTick');
+  const refreshMap = [
+    source.includes('shadowDirty') && 'shadowDirty = true;',
+    source.includes('shadowClock') && 'shadowClock = -1;',
+    rateLimited && 'shadowTick = 0;'
+  ].filter(Boolean).join(' ');
   const cameraEntry = classic ? 'function updateCamera(dt) {' : 'function cameraStep(dt){';
   const cameraOverride = classic
     ? 'if (window.shadowProbe) { eyePos = shadowProbe.eye; VP = mm(perspective(.66, stageW / stageH, .16, 160), look(eyePos, shadowProbe.target)); return; }'
@@ -52,7 +57,6 @@ function instrument(source, game) {
       target: [rigX - .04, 1.03, rigZ - .65]
     };
     let shadowPasses = 0;
-    let neutralDepth = null;
     let useNeutral = false;
     let frameBuffer = null;
     const originalBindFramebuffer = gl.bindFramebuffer.bind(gl);
@@ -72,7 +76,7 @@ function instrument(source, game) {
       countBlit(...args);
     };` : ''}
     gl.bindTexture = (target, texture) => originalBindTexture(target, useNeutral && texture === shadowTex ? neutralDepth : texture);
-    neutralDepth = gl.createTexture();
+    const neutralDepth = gl.createTexture();
     originalBindTexture(gl.TEXTURE_2D, neutralDepth);
     gl.texImage2D(gl.TEXTURE_2D,0,gl.DEPTH_COMPONENT16,1,1,0,gl.DEPTH_COMPONENT,gl.UNSIGNED_SHORT,new Uint16Array([65535]));
     gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.NEAREST);
@@ -135,9 +139,7 @@ function instrument(source, game) {
     function paint() { render(1 / 60); }
     function fresh() {
       // Update the cached map if this build still uses a reduced shadow update rate.
-      try { eval('shadowDirty = true'); } catch {}
-      try { eval('shadowClock = -1'); } catch {}
-      try { eval('shadowTick = 0'); } catch {}
+      ${refreshMap}
       paint();
     }
     putPose(.88,.50,0);
@@ -155,13 +157,12 @@ function instrument(source, game) {
         const before = capture();
         const blade = bladePolygon();
         const ground = groundPolygon();
-        let cadence;
-        try { cadence = eval('shadowTick'); } catch {}
+        ${rateLimited ? 'const cadence = shadowTick;' : ''}
         const refreshStart = shadowPasses;
         fresh();
         let expected = capture();
         const referencePasses = shadowPasses - refreshStart;
-        if (cadence !== undefined) eval('shadowTick = cadence');
+        ${rateLimited ? 'shadowTick = cadence;' : ''}
         const result = { lift, passes, referencePasses, blade: measure(before,expected,blade), ground: measure(before,expected,ground), glError: gl.getError() };
         if (images) {
           result.image = snapshot(before);
@@ -173,7 +174,7 @@ function instrument(source, game) {
           ${classic ? "gardenKey = '';" : ''}
           result.bladeShadow = measure(before,lit,blade);
           result.groundShadow = measure(before,lit,ground);
-          if (cadence !== undefined) eval('shadowTick = cadence');
+          ${rateLimited ? 'shadowTick = cadence;' : ''}
         }
         return result;
       }
