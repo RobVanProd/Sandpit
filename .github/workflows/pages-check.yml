@@ -2,7 +2,7 @@ name: Check public Pages
 on:
   pull_request:
     types: [opened, synchronize, reopened, closed]
-    paths: ['.github/workflows/pages-check.yml']
+    paths: ['index.html', 'field/index.html', '.github/workflows/pages-check.yml']
   push:
     branches: [main]
     paths: ['index.html', 'field/index.html', '.nojekyll', '.github/workflows/pages-check.yml']

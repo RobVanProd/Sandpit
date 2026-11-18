@@ -32,15 +32,19 @@ Right-drag to orbit in the pit-rim view. Sound starts muted. The transmitter can
 
 ## Simulation
 
-A 128 × 96 grid stores sand elevation, bedrock, suspended sediment, water depth, moisture and compaction. Every shared face has one signed pipe flux. A donor limiter prevents a cell from giving away more water or sediment than it holds. The sand budget includes loose terrain, suspended grains and all four payloads. Water has separate spigot, rain and outlet ledgers.
+Sand at rest lives in a heightfield. Cuts, sliding wet banks, tire shear, and tipped loads can turn part of that bed into volume-carrying 3D clumps. Each clump carries its sand, loam and gravel fractions. Gravity moves it between the cutting edge, the bed and the ground. Once supported and slow, it returns its volume to nearby cells. Suspended sediment in water has its own balance.
 
-Moisture changes the repose slope. Seepage can carry grains through a weak crest. Saturation, wheel compaction and undercutting affect how quickly it collapses. Tread ruts push their displaced sand to the sides.
+The ground has fixed native layers and a mixed layer of moved soil. Cutting through loose fill exposes a more cohesive loam bank, gravel lenses and eventually bedrock. Damp faces hold steeper cuts, loose grains roll downhill and saturated loam loses grip. Compacting a haul route changes how the next pass drives and how readily the next flow erodes it.
+
+The Field Simulator tracks the truck load as a small heightfield attached to the bed. Its free surface slumps as the truck tips. Earthworks tracks a smaller cargo approximation with retained material composition and a movable load center. The field guide shows the material beneath the tool and the volume moving in clumps.
 
 WebGL 2 draws the displaced surfaces, articulated machinery, shadow map and pixel outline pass. A software renderer shares the same field and vehicle models on browsers without WebGL 2. Canvas 2D draws the transmitter and world markers. Web Audio creates all sound.
 
 ## Verification
 
-[Earthworks results](verification/results.json) · [Field Simulator results](verification/field-results.json) · [Vehicle and water captures](verification/polish.jpg) · [Earthworks browser suite](verification/check.py) · [Field Simulator browser suite](verification/field.cjs)
+[Earthworks results](verification/results.json) · [Field Simulator results](verification/field-results.json) · [Granular sand comparison](verification/granular-comparison.jpg) · [Vehicle and water captures](verification/polish.jpg) · [Earthworks browser suite](verification/check.py) · [Field Simulator browser suite](verification/field.cjs)
+
+Material and grain regressions are in [material.cjs](verification/material.cjs), [field-grains.cjs](verification/field-grains.cjs) and [earthwork-grains.cjs](verification/earthwork-grains.cjs). They exercise layer exposure, mass transfer and settling using the game code.
 
 The acceptance suite checks the final HTML directly with Chromium. It tests simultaneous touch inputs, Gamepad API mappings, both contracts, payload transfers, a natural levee breach and a seeded four-minute storm. Scenario fixtures stage machine positions. Digging, hydraulic transfers, water movement, truck travel and objective evaluation use the gameplay code.
 

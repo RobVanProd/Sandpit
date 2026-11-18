@@ -635,6 +635,7 @@
           height: 72px;
         }
       }
+    .soilReadout{border-left:2px solid #c89359;padding:.45em .65em;font-family:monospace;line-height:1.45;color:#efdfb8}
     </style>
   </head>
   <body>
@@ -725,6 +726,7 @@
           recovers, X digs and Y dumps.
         </p>
         <p id="rigguide"></p>
+        <p id="soilReadout" class="soilReadout"></p>
         <p><a href="https://robvanprod.github.io/Sandpit/field/" style="color: inherit" target="_blank" rel="noopener">Open RC Field Simulator</a></p>
         <div id="weather">
           <label
@@ -828,6 +830,144 @@
         earthworks = field(),
         initial = field(),
         pixels = new Float32Array(NN * 4);
+      // Native horizons retain their elevation after cuts. Moved soil forms a separate mixed cap.
+      const groundSize=h.length, groundLoam=new Float32Array(groundSize), groundGravel=new Float32Array(groundSize), groundRock=new Float32Array(groundSize);
+      const bankTop=field(), gravelTop=field(), gravelBase=field(), gravelShare=field();
+      const movedDepth=field(), movedLoam=field(), movedGravel=field();
+      const suspendedLoam=field(), suspendedGravel=field(), fluxLoam=field(), fluxGravel=field();
+      const slideLoam=field(), slideGravel=field(), incomingLoam=field(), incomingGravel=field();
+      const sampleDepth=.065, plainSand={sand:1,loam:0,gravel:0};
+      const materialScratch={loam:0,gravel:0};
+
+      function initGround(i,x,z,base){
+       const lentil=Math.max(
+        Math.exp(-(((x-3.3)/2.3)**2)-(((z+3.1)/1.7)**2)),
+        Math.exp(-(((x+9.8)/2.6)**2)-(((z+1.7)/2.1)**2)),
+        Math.exp(-(((x-10.3)/1.9)**2)-(((z-3.3)/1.9)**2))
+       );
+       const pavement=Math.exp(-(((x-12.2)/2.4)**2)-(((z+1.8)/2.6)**2));
+       bed[i]=Math.min(h[i]-.032,Math.max(base+1.22*pavement,base+(h[i]-base-.036)*pavement**3));
+       bankTop[i]=clamp(.55+.18*Math.sin(.54*x+.37*z)+.12*Math.cos(.83*z),bed[i],h[i]-.045);
+       gravelTop[i]=Math.min(h[i]-.022,bankTop[i]-.24+.27*lentil);
+       gravelBase[i]=Math.max(bed[i],gravelTop[i]-.11-.17*lentil);
+       gravelShare[i]=.68*lentil**1.5;
+       movedDepth[i]=movedLoam[i]=movedGravel[i]=0;
+       suspendedLoam[i]=suspendedGravel[i]=0;
+       refreshGround(i);
+      }
+
+      // Get component heights in a slice without modifying the column.
+      function sampleGround(i,amount,out){
+       const cap=Math.min(amount,movedDepth[i]), native=amount-cap;
+       let loam=0,gravel=0;
+       if(cap>0){
+        loam=cap*movedLoam[i]/movedDepth[i];
+        gravel=cap*movedGravel[i]/movedDepth[i];
+       }
+       if(native>0){
+        const top=h[i]-movedDepth[i], bottom=top-native;
+        const belowBank=clamp(bankTop[i]-bottom,0,native);
+        const lens=Math.max(0,Math.min(top,gravelTop[i])-Math.max(bottom,gravelBase[i]));
+        const lensStone=lens*gravelShare[i];
+        const lensInBank=Math.max(0,Math.min(top,gravelTop[i],bankTop[i])-Math.max(bottom,gravelBase[i]));
+        gravel+=lensStone;
+        loam+=.93*(belowBank-lensInBank*gravelShare[i]);
+       }
+       out.loam=loam;out.gravel=gravel;
+      }
+
+      function refreshGround(i){
+       const depth=Math.max(0,Math.min(sampleDepth,h[i]-bed[i]));
+       sampleGround(i,depth,materialScratch);
+       groundLoam[i]=materialScratch.loam/sampleDepth;
+       groundGravel[i]=materialScratch.gravel/sampleDepth;
+       groundRock[i]=1-depth/sampleDepth;
+      }
+
+      function groundMaterial(i){
+       const loam=groundLoam[i],gravel=groundGravel[i],rock=groundRock[i];
+       return {sand:Math.max(0,1-loam-gravel-rock),loam,gravel,rock};
+      }
+
+      function groundHardness(i){
+       const m=wet[i], damp=4*m*(1-m);
+       return 1+.17*pack[i]+groundLoam[i]*(1.37+.53*damp-.39*m*m)+groundGravel[i]*1.72+groundRock[i]*3.8+.20*damp;
+      }
+
+      function groundTraction(i){
+       const m=wet[i], damp=4*m*(1-m);
+       return clamp(.88+.10*pack[i]+.14*damp*(1-m)+.13*groundGravel[i]-.53*m*m*groundLoam[i]-.29*m*m*(1-groundLoam[i])-.30*groundRock[i]*m,.25,1.12);
+      }
+
+      function groundResponse(i){
+       const m=wet[i];
+       return {wetness:m,hardness:groundHardness(i),traction:groundTraction(i),repose:.63+.23*groundLoam[i]+.15*groundGravel[i]+.51*m*(1-m)-.16*m*m};
+      }
+
+      function takeGround(i,amount,acc=null,update=true){
+       if(amount<=0)return;
+       sampleGround(i,amount,materialScratch);
+       if(acc){acc.loam+=materialScratch.loam;acc.gravel+=materialScratch.gravel}
+       const cap=Math.min(amount,movedDepth[i]);
+       if(cap>0){
+        const ratio=1-cap/movedDepth[i];
+        movedDepth[i]-=cap;movedLoam[i]*=ratio;movedGravel[i]*=ratio;
+       }
+       h[i]-=amount;
+       if(update)refreshGround(i);
+      }
+
+      function putGround(i,amount,loam=0,gravel=0,update=true){
+       if(amount<=0)return;
+       h[i]+=amount;
+       movedDepth[i]+=amount;movedLoam[i]+=loam;movedGravel[i]+=gravel;
+       if(update)refreshGround(i);
+      }
+
+      function groundMixture(total,parts,out){
+       if(total>0&&out){
+        out.loam=parts.loam/total;out.gravel=parts.gravel/total;
+        out.sand=Math.max(0,1-out.loam-out.gravel);
+       }
+      }
+
+      // Components follow the same conservative face flux as the scalar sediment total.
+      function carrySediment(donor,receiver,amount,total){
+       if(amount<=0||total<=0)return;
+       const ratio=amount/total, loam=ratio*suspendedLoam[donor], gravel=ratio*suspendedGravel[donor];
+       fluxLoam[donor]-=loam;fluxGravel[donor]-=gravel;
+       fluxLoam[receiver]+=loam;fluxGravel[receiver]+=gravel;
+      }
+
+      const removedGround={loam:0,gravel:0};
+      function erodeGround(i,receiver,amount){
+       removedGround.loam=removedGround.gravel=0;
+       takeGround(i,amount,removedGround);
+       suspendedLoam[receiver]+=removedGround.loam;suspendedGravel[receiver]+=removedGround.gravel;
+      }
+      function settleGround(i,amount,total){
+       if(amount<=0||total<=0)return;
+       const ratio=Math.min(1,amount/total),loam=ratio*suspendedLoam[i],gravel=ratio*suspendedGravel[i];
+       suspendedLoam[i]-=loam;suspendedGravel[i]-=gravel;
+       putGround(i,amount,loam,gravel);
+      }
+      function prepareSlide(i,amount){
+       slideLoam[i]=slideGravel[i]=0;
+       if(amount<=0)return;
+       removedGround.loam=removedGround.gravel=0;
+       takeGround(i,amount,removedGround,false);
+       slideLoam[i]=removedGround.loam/amount;slideGravel[i]=removedGround.gravel/amount;
+      }
+      function sendSlide(donor,receiver,amount){
+ if(watchBank && amount>bankFlux && water[receiver]>.012 && water[donor]<.16 &&
+    h[donor]+soilOut[donor]*soilLimit[donor]-h[receiver]-soilOut[receiver]*soilLimit[receiver]>.70*dx){
+  bankFrom=donor;bankTo=receiver;bankFlux=amount;
+ }
+
+       incomingLoam[receiver]+=amount*slideLoam[donor];
+       incomingGravel[receiver]+=amount*slideGravel[donor];
+      }
+
       const xx = (i) => (i % NX) * dx - W / 2,
         zz = (i) => Math.floor(i / NX) * dz - D / 2;
       function cell(x, z) {
@@ -895,7 +1035,7 @@
         physicsRate = 30,
         rainAccum = 0,
         hydraulicActivity = 0;
-      function resetWorld(m) {
+      function resetWorld(m) {bankSampleClock=0;
         mode = m;
         clock = stepNo = addedWater = outWater = breaches = delivered = received = dugSpill = 0;
         won = failed = false;
@@ -907,6 +1047,9 @@
         breachSites = [];
         completion = null;
         particles = [];
+        grainClumps.length = 0;
+        grainSettled = grainOverflow = 0;
+        grainSeed = 83127 + m * 179;
         flow = m === 2 ? 0.45 : m === 1 ? 0.21 : 0.36;
         raining = false;
         $("rain").checked = false;
@@ -952,7 +1095,7 @@
           if (m === 2)
             s += 0.79 * Math.exp(-(((z - 2.8) / 0.46) ** 2)) * Math.exp(-((dist / 2.35) ** 4));
           h[i] = s;
-          bed[i] = Math.min(-0.82, s - 0.58);
+          initGround(i,x,z,Math.min(-0.82, s - 0.58));
           const inStream = (Math.abs(dist) < width * 1.5 || pocket > 0.28) && (m !== 2 || z < 2.55);
           water[i] = inStream ? Math.max(0, level + (m === 2 ? 0.14 : 0) - s) : 0;
           wet[i] = clamp(ch * 1.2, 0, 1);
@@ -970,6 +1113,8 @@
           house: -0.4,
           reach: 0.56,
           payload: 0,
+          pendingGrain: 0,
+          cargo: newCargo(),
           capacity: [0.34, 0.73, 2.8, 0.48][n],
           load: 0,
           slip: 0,
@@ -992,6 +1137,7 @@
         let sum = 0;
         for (let i = 0; i < NN; i++) sum += (h[i] - bed[i] + sed[i]) * area;
         for (const r of rigs) sum += r.payload;
+        for (const g of grainClumps) sum += g.volume;
         return sum;
       }
       function waterMass() {
@@ -1025,10 +1171,11 @@
             if (dd < 1) fn(i, (1 - dd) ** 1.25);
           }
       }
-      function dig(x, z, r, amount, cutFloor = -Infinity, tool = true) {
+      function dig(x, z, r, amount, cutFloor = -Infinity, tool = true, cutMaterial = null) {
         if (amount <= 0) return 0;
         let sum = 0,
           q = 0;
+        const parts={loam:0,gravel:0};
         brush(x, z, r, (i, w) => {
           sum += w;
         });
@@ -1036,18 +1183,19 @@
         brush(x, z, r, (i, w) => {
           let v = Math.min(
             Math.max(0, h[i] - Math.max(bed[i], cutFloor)),
-            (amount * w) / (sum * area),
+            (amount * w) / (sum * area * groundHardness(i)),
           );
-          h[i] -= v;
+          takeGround(i,v,parts);
           if (tool) earthworks[i] -= v;
           q += v * area;
           pack[i] *= 0.91;
           if (mode === 2 && Math.hypot(xx(i) - spill[0], zz(i) - spill[1]) < 1.6)
             dugSpill += v * area;
         });
+        groundMixture(q/area,parts,cutMaterial);
         return q;
       }
-      function place(x, z, r, amount, comp = 0, tool = true) {
+      function place(x, z, r, amount, comp = 0, tool = true, composition = null, moisture = null) {
         if (amount <= 0) return;
         let sum = 0;
         brush(x, z, r, (i, w) => {
@@ -1056,7 +1204,9 @@
         if (!sum) throw Error("Material left field");
         brush(x, z, r, (i, w) => {
           const lift = (amount * w) / (sum * area);
-          h[i] += lift;
+          const medium=composition||plainSand;
+          putGround(i,lift,lift*medium.loam,lift*medium.gravel);
+          if(moisture!==null)wet[i]=mix(wet[i],moisture,Math.min(1,lift/sampleDepth));
           if (tool) earthworks[i] += lift;
           ridgePeak[i] = Math.max(ridgePeak[i], h[i]);
           pack[i] = clamp(pack[i] + comp * w, 0, 1);
@@ -1124,16 +1274,44 @@
           }
         wet.set(nextWet);
       }
-      function soilSlopeStep(dt) {
+      
+// Wake a piece of the strongest slipping face beside water. Its material has
+// already left the donor in the slope solver. Redirect the receiver's credit
+// into a moving clump only if there is room to simulate it.
+let bankSampleClock=0, bankFrom=-1, bankTo=-1, bankFlux=0, watchBank=false;
+function beginBankSample(dt){
+ bankSampleClock-=dt;
+ watchBank=bankSampleClock<=0 && grainClumps.length<grainLimit-8;
+ if(bankSampleClock<=0)bankSampleClock=.105;
+ bankFrom=-1;bankFlux=.004;
+}
+function releaseBankSample(){
+ if(!watchBank||bankFrom<0)return;
+ const i=bankFrom,j=bankTo,amount=bankFlux*.36;
+ const ix=i%NX,iz=Math.floor(i/NX),jx=j%NX,jz=Math.floor(j/NX);
+ const sx=(jx-ix)*dx,sz=(jz-iz)*dz,length=Math.hypot(sx,sz);
+ const x=ix*dx-W/2+sx*.28,z=iz*dz-D/2+sz*.28,y=sample(h,x,z)+.045;
+ const loam=slideLoam[i],gravel=slideGravel[i],mat={sand:Math.max(0,1-loam-gravel),loam,gravel};
+ 
+ emitClump(amount*area,{kind:'bank',owner:-1,x,y,z,vx:sx/length*.42,vy:0,vz:sz/length*.42,
+   moisture:wet[i],material:mat,spread:.28,targetX:x+sx,targetZ:z+sz});
+ soilIn[j]-=amount;
+
+ incomingLoam[j]-=amount*loam;
+ incomingGravel[j]-=amount*gravel;
+}
+
+function soilSlopeStep(dt) {
+        beginBankSample(dt);
         // Compute candidate face transfers from a shared height snapshot. Each
         // face remembers its direction and keeps flowing to the lower stopping angle.
         soilOut.fill(0);
-        soilIn.fill(0);
+        soilIn.fill(0);incomingLoam.fill(0);incomingGravel.fill(0);
         for (let i = 0; i < NN; i++) {
           const m = wet[i],
             submerged = Math.min(1, water[i] / 0.14),
             dampBond = 4 * m * (1 - m) * (1 - submerged);
-          soilStatic[i] = 0.6745 + (0.34 + 0.29 * pack[i]) * dampBond - 0.15 * submerged + 0.12 * pack[i];
+          soilStatic[i] = 0.6745 + (0.34 + 0.29 * pack[i]) * dampBond - 0.15 * submerged + 0.12 * pack[i]+.23*groundLoam[i]+.15*groundGravel[i];
           soilDynamic[i] = soilStatic[i] - 0.125 - 0.29 * pack[i] * dampBond;
         }
         const rate = Math.min(0.22, dt * 5.9);
@@ -1145,18 +1323,23 @@
             propose(3, k > 0 && j + 1 < NZ, i, i + NX - 1, soilDiagonal, 0.55);
           }
         for (let i = 0; i < NN; i++)
-          soilLimit[i] = soilOut[i] > 0 ? Math.min(1, (h[i] - bed[i]) / soilOut[i]) : 0;
+          {
+            soilLimit[i] = soilOut[i] > 0 ? Math.min(1, Math.max(0,h[i] - bed[i]) / soilOut[i]) : 0;
+            prepareSlide(i,soilOut[i]*soilLimit[i]);
+          }
         for (let i = 0; i < NN; i++) {
           transfer(0, i, i + 1);
           transfer(1, i, i + NX);
           transfer(2, i, i + NX + 1);
           transfer(3, i, i + NX - 1);
         }
-        for (let i = 0; i < NN; i++) {
+        releaseBankSample();
+ for (let i = 0; i < NN; i++) {
           if (soilOut[i] === 0 && soilIn[i] === 0) continue;
-          const standing = Math.max(0, h[i] - bed[i] - soilOut[i] * soilLimit[i]);
+          const standing = Math.max(0, h[i] - bed[i]);
           const incoming = soilIn[i];
-          h[i] = bed[i] + standing + incoming;
+          putGround(i,incoming,incomingLoam[i],incomingGravel[i],false);
+          refreshGround(i);
           // Grains lose their packing as they tumble and build a fresh toe.
           if (incoming > 0) pack[i] *= standing / (standing + incoming);
         }
@@ -1184,8 +1367,12 @@
         }
         function transfer(direction, i, j) {
           const amount = soilTransfer[direction * NN + i];
-          if (amount > 0) soilIn[j] += amount * soilLimit[i];
-          if (amount < 0) soilIn[i] -= amount * soilLimit[j];
+          if (amount > 0) {
+            const moved=amount*soilLimit[i];soilIn[j]+=moved;sendSlide(i,j,moved);
+          }
+          if (amount < 0) {
+            const moved=-amount*soilLimit[j];soilIn[i]+=moved;sendSlide(j,i,moved);
+          }
         }
       }
       function exchangeSediment(i, dt) {
@@ -1207,13 +1394,13 @@
           downslope = speed > 0.001 ? clamp(-(vx * gx + vz * gz) / speed, -0.5, 0.5) : 0,
           m = wet[i],
           dampBond = 4 * m * (1 - m) * (1 - Math.min(1, depth / 0.14)),
-          threshold = 0.089 * (1 + 2.05 * pack[i] + 0.45 * dampBond) * (1 - 0.8 * downslope),
+          threshold = 0.089 * (1 + 2.05 * pack[i] + 0.45 * dampBond + 1.6*groundLoam[i] + 4.2*groundGravel[i]) * (1 - 0.8 * downslope),
           excess = Math.max(0, 0.74 * speed * speed - threshold),
           carrying = depth * Math.min(0.21, 0.051 * excess),
           deficit = carrying - sed[i];
         let move =
           deficit > 0 && depth > 0.005
-            ? Math.min(h[i] - bed[i], deficit * dt * 2.4 / (1 + 2.0 * pack[i]))
+            ? Math.min(h[i] - bed[i], deficit * dt * 2.4 / (1 + 2.0 * pack[i]+groundLoam[i]+2*groundGravel[i]))
             : Math.min(0, deficit) * Math.min(1, dt * (depth < 0.008 ? 13 : 3.6 / (1 + speed)));
         if (move < 0) {
           const thickness = h[i] - bed[i];
@@ -1240,7 +1427,7 @@
           }
         }
         dw.fill(0);
-        ds.fill(0);
+        ds.fill(0);fluxLoam.fill(0);fluxGravel.fill(0);
         const drag = Math.exp(-dt * 3.6);
         for (let j = 0, i = 0; j < NZ; j++)
           for (let k = 0; k < NX; k++, i++) {
@@ -1276,6 +1463,7 @@
           dw[j] += f;
           ds[i] -= s;
           ds[j] += s;
+          carrySediment(src,src===i?j:i,Math.abs(s),sed[src]);
           return q * lim[src];
         }
         for (let i = 0; i < NN; i++) {
@@ -1285,6 +1473,7 @@
         for (let i = 0; i < NN; i++) {
           water[i] = Math.max(0, water[i] + dw[i]);
           sed[i] += ds[i];
+          suspendedLoam[i]+=fluxLoam[i];suspendedGravel[i]+=fluxGravel[i];
         }
         let motion = 0;
         for (let i = 0; i < NN; i++) {
@@ -1298,7 +1487,8 @@
           }
         }
         for (let i = 0; i < NN; i++) {
-          h[i] -= ds[i];
+          if(ds[i]>0)erodeGround(i,i,ds[i]);
+          if(ds[i]<0)settleGround(i,-ds[i],sed[i]);
           sed[i] += ds[i];
         }
         flowMotion = motion / NN;
@@ -1326,12 +1516,12 @@
               h[b] < h[a] + water[a] + 0.24 &&
               pack[b] < 0.88
             ) {
-              let f = Math.min(water[a], dt * 0.35 * head * (1 - pack[b]));
+              let f = Math.min(water[a], dt * 0.35 * head * (1 - pack[b])*(1-.76*groundLoam[b]+.45*groundGravel[b]));
               water[a] -= f;
               water[c] += f;
               wet[b] = Math.min(1, wet[b] + dt * 0.5);
-              let e = Math.min(h[b] - bed[b], f * (0.4 + 0.8 * wet[b]));
-              h[b] -= e;
+              let e = Math.min(h[b] - bed[b], f * (0.4 + 0.8 * wet[b])/groundHardness(b));
+              erodeGround(b,c,e);
               sed[c] += e;
               if (ridgePeak[b] - h[b] > 0.095 && water[c] > 0.02 && clock - lastBreach > 12)
                 breach(xx(b), zz(b));
@@ -1542,31 +1732,298 @@
           return depth > 0.012 && depth > contactDepth(before[i], other) + 0.0001;
         }));
       }
+      const grainClumps = [];
+      const grainLimit = 260;
+      let grainSettled = 0, grainOverflow = 0, grainSeed = 83127;
+      function grainRandom() {
+        grainSeed = (Math.imul(grainSeed, 1664525) + 1013904223) >>> 0;
+        return grainSeed / 4294967296;
+      }
+      function newCargo() {
+        return { moisture: 0, shift: 0, side: 0, material: plainSand };
+      }
+      function soilClumpMoisture(x, z) {
+        return clamp(sample(wet, x, z) + Math.min(0.32, sample(water, x, z) * 1.4), 0, 1);
+      }
+      function addCargo(r, volume, moisture, material, side, shift) {
+        if (!volume) return;
+        const fraction = volume / (r.payload + volume), old = r.cargo;
+        r.cargo = {
+          shift: mix(old.shift, shift, fraction),
+          side: mix(old.side, side, fraction),
+          moisture: mix(old.moisture, moisture, fraction),
+          material: {
+            sand: mix(old.material.sand, material.sand, fraction),
+            loam: mix(old.material.loam, material.loam, fraction),
+            gravel: mix(old.material.gravel, material.gravel, fraction),
+          },
+        };
+        r.payload += volume;
+      }
+      function localPoint(m, x, y, z) {
+        const a = x - m[12], b = y - m[13], c = z - m[14];
+        return [a * m[0] + b * m[1] + c * m[2],
+          a * m[4] + b * m[5] + c * m[6],
+          a * m[8] + b * m[9] + c * m[10]];
+      }
+      function groundClamp(x, z) {
+        return [clamp(x, -W / 2 + 0.2, W / 2 - 0.2), clamp(z, -D / 2 + 0.2, D / 2 - 0.2)];
+      }
+      function settleClump(g, x, z) {
+        [x, z] = groundClamp(x, z);
+        place(x, z, g.spread, g.volume, g.kind === "wheel" ? 0.025 : g.kind === "blade" ? 0.014 : 0,
+          g.kind !== "wheel", g.material, g.moisture);
+        grainSettled += g.volume;
+        if (g.haul && Math.hypot(x - levee[0], z - levee[1]) < 1.55) delivered += g.volume;
+      }
+      function catchClump(g, n, side = 0, shift = 0) {
+        const r = rigs[n], room = Math.max(0, r.capacity - r.payload);
+        const volume = Math.min(g.volume, room);
+        if (n === 2 && volume > 0) {
+          if (r.payload < 0.001) r.haulDistance = 0;
+          received += volume;
+          if (flashT < 2 || flash !== "Truck bed receiving fill") note("Truck bed receiving fill");
+        }
+        addCargo(r, volume, g.moisture, g.material, side, shift);
+        g.volume -= volume;
+        if (g.volume > 0) settleClump(g, g.x, g.z);
+      }
+      function emitClump(volume, options) {
+        if (volume <= 0) return;
+        const g = {
+          ...options, volume, age: 0, rest: 0,
+          radius: clamp(Math.cbrt(volume * 0.2387), 0.028, 0.165),
+          spin: grainRandom() * TAU,
+        };
+        if (grainClumps.length >= grainLimit) {
+          grainOverflow += volume;
+          if (g.gather !== undefined) catchClump(g, g.gather);
+          else {
+            const offsetX = clamp(g.targetX - g.x, -0.35, 0.35),
+              offsetZ = clamp(g.targetZ - g.z, -0.35, 0.35);
+            settleClump(g, g.x + offsetX, g.z + offsetZ);
+          }
+          return;
+        }
+        if (g.gather !== undefined) rigs[g.gather].pendingGrain += volume;
+        if (g.receiver === 2) rigs[2].pendingGrain += volume;
+        grainClumps.push(g);
+      }
+      function toolCargoStep(dt) {
+        for (let n = 0; n < rigs.length; n++) {
+          const r = rigs[n];
+          if (r.payload <= 0) continue;
+          // Deposits retain their location on level beds. The cargo shifts only when
+          // tilt or driving overcomes the surface's moisture-dependent hold.
+          const incline = n === 2 ? -r.lift * 1.12 + r.pitch : n === 0 ? 0 : 0.38 - 0.58 * r.curl,
+            adhesion = 4 * r.cargo.moisture * (1 - r.cargo.moisture),
+            shear = Math.sin(incline) - 0.05 * r.speed,
+            sideShear = -Math.sin(r.roll) + r.steer * r.speed * 0.08,
+            hold = 0.22 + 0.23 * adhesion,
+            rate = dt * (4.2 - 2.5 * adhesion);
+          if (Math.abs(shear) > hold) r.cargo.shift = mix(r.cargo.shift, clamp(shear, -0.7, 0.48), Math.min(1, rate));
+          if (Math.abs(sideShear) > hold) r.cargo.side = mix(r.cargo.side, clamp(sideShear, -0.4, 0.4), Math.min(1, rate * 0.7));
+        }
+      }
+      // One world unit is one decimetre. Keep the contact cells just wider than two clump radii.
+      const grainGravity = 98.1, grainContactCell = 0.35;
+      function grainContacts() {
+        const bins = new Map();
+        for (const g of grainClumps) {
+          if (g.gather !== undefined || g.receiver === 2) continue;
+          const ix = Math.floor((g.x + W / 2) / grainContactCell),
+            iz = Math.floor((g.z + D / 2) / grainContactCell), key = ix + 100 * iz;
+          for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+            const neighbors = bins.get(key + dx + 100 * dz);
+            if (!neighbors) continue;
+            for (const other of neighbors) {
+              const x = g.x - other.x, y = g.y - other.y, z = g.z - other.z,
+                reach = (g.radius + other.radius) * 0.84,
+                d2 = x * x + y * y + z * z;
+              if (d2 >= reach * reach || d2 < 1e-8) continue;
+              const gap = Math.sqrt(d2), nx = x / gap, nz = z / gap,
+                closing = Math.min(0, (g.vx - other.vx) * nx + (g.vz - other.vz) * nz),
+                impulse = Math.min(0.45, (reach - gap) * 4 - closing * 0.32),
+                share = other.volume / (g.volume + other.volume);
+              g.vx += nx * impulse * share;
+              g.vz += nz * impulse * share;
+              other.vx -= nx * impulse * (1 - share);
+              other.vz -= nz * impulse * (1 - share);
+            }
+          }
+          if (!bins.has(key)) bins.set(key, []);
+          bins.get(key).push(g);
+        }
+      }
+      function grainStep(dt) {
+        if (!grainClumps.length) return;
+        grainContacts();
+        const truck = rigs[2], frame = truckBed(truck, rigFrame(truck)),
+          captureFrames = new Map();
+        const toolFrame = (n) => {
+          if (!captureFrames.has(n)) {
+            const r = rigs[n];
+            captureFrames.set(n, n === 0 ? dozerBlade(r, rigFrame(r)) : scoopPose(n, r).tool);
+          }
+          return captureFrames.get(n);
+        };
+        for (let i = grainClumps.length - 1; i >= 0; i--) {
+          const g = grainClumps[i];
+          g.age += dt;
+          if (g.gather !== undefined) {
+            const n = g.gather, r = rigs[n];
+            const progress = Math.min(1, g.age / g.flight),
+              [x, y, z] = tf(toolFrame(n), g.captureAt);
+            const previousX = g.x, previousY = g.y, previousZ = g.z,
+              hop = 0.5 * grainGravity * g.age * Math.max(0, g.flight - g.age);
+            g.x = mix(g.origin[0], x, progress);
+            g.y = mix(g.origin[1], y, progress) + hop;
+            g.z = mix(g.origin[2], z, progress);
+            g.vx = (g.x - previousX) / dt;
+            g.vy = (g.y - previousY) / dt;
+            g.vz = (g.z - previousZ) / dt;
+            g.spin += dt * Math.hypot(g.vx, g.vz) / g.radius;
+            if (progress === 1) {
+              r.pendingGrain = Math.max(0, r.pendingGrain - g.volume);
+              catchClump(g, n, clamp(g.captureAt[0], -0.4, 0.4), g.captureAt[2] * 0.5);
+              grainClumps.splice(i, 1);
+            }
+            continue;
+          }
+          let done = false;
+          const adhesion = clamp(4 * g.moisture * (1 - g.moisture) * (1 + g.material.loam * 0.24 - g.material.gravel * 0.36), 0, 1),
+            slices = Math.ceil(dt * 90), substep = dt / slices;
+          for (let k = 0; k < slices; k++) {
+            const previousX = g.x, previousY = g.y, previousZ = g.z;
+            g.x += g.vx * substep;
+            g.y += (g.vy - grainGravity * substep * 0.5) * substep;
+            g.vy -= substep * grainGravity;
+            g.z += g.vz * substep;
+            const bounded = groundClamp(g.x, g.z);
+            if (g.x !== bounded[0]) g.vx *= -0.19;
+            if (g.z !== bounded[1]) g.vz *= -0.19;
+            [g.x, g.z] = bounded;
+            if (g.source !== 2 && Math.hypot(g.x - truck.x, g.z - truck.z) < 2.25 &&
+                g.y < truck.y + 2.1 && g.y > truck.y + 0.52) {
+              const [x, y, z] = localPoint(frame, g.x, g.y, g.z);
+              const floor = 0.125 + g.radius;
+              if (truck.lift < 0.26 && y <= floor && g.vy < 0) {
+                const [px, py, pz] = localPoint(frame, previousX, previousY, previousZ);
+                if (py >= floor) {
+                  const fraction = (py - floor) / (py - y),
+                    sx = mix(px, x, fraction), sz = mix(pz, z, fraction);
+                  if (Math.abs(sx) < 0.71 && sz > -0.115 && sz < 1.68) {
+                    if (g.receiver === 2) truck.pendingGrain = Math.max(0, truck.pendingGrain - g.volume);
+                    catchClump(g, 2, clamp(sx, -0.4, 0.4), clamp(sz - 0.79, -0.7, 0.48));
+                    done = true;
+                    break;
+                  }
+                }
+              }
+              // Rim and bulkhead deflect clumps that do not clear the opening.
+              if (y < 0.77 && y > floor && (Math.abs(x) >= 0.70 || z < -0.11 || z > 1.65) &&
+                  Math.abs(x) < 0.82 && z > -0.21 && z < 1.75 && previousY > g.y) {
+                g.vx += Math.sign(x || 1) * frame[0] * 0.22;
+                g.vz += Math.sign(x || 1) * frame[2] * 0.22;
+                g.vy *= 0.7;
+              }
+            }
+            for (const n of [0, 1, 3]) {
+              const r = rigs[n];
+              if (g.source === n || Math.abs(g.x - r.x) > 3.6 || Math.abs(g.z - r.z) > 3.6) continue;
+              const tool = toolFrame(n), [x, y, z] = localPoint(tool, g.x, g.y, g.z);
+              if (n === 0 && Math.abs(x) < 1.14 && y > 0.06 && y < 0.72 && Math.abs(z - 0.16) < g.radius) {
+                const [, , from] = localPoint(tool, previousX, previousY, previousZ),
+                  side = Math.sign(from - 0.16) || 1;
+                if (side * (g.vx * tool[8] + g.vz * tool[10]) >= 0) continue;
+                const corrected = tf(tool, [x, y, 0.16 + side * g.radius]);
+                [g.x, g.y, g.z] = corrected;
+                g.vx += side * tool[8] * 0.85;
+                g.vz += side * tool[10] * 0.85;
+              } else if (n !== 0 && g.vy < 0 && r.payload + r.pendingGrain < r.capacity) {
+                const spec = n === 1 ? loaderScoop : excavatorScoop, level = -0.105 + g.radius;
+                if (Math.abs(x) > spec.width * 0.45 || z <= spec.section[2][0] ||
+                    z >= spec.lip[2] - 0.10 || y > level) continue;
+                const [, before] = localPoint(tool, previousX, previousY, previousZ);
+                if (before < level) continue;
+                if (g.receiver === 2) truck.pendingGrain = Math.max(0, truck.pendingGrain - g.volume);
+                catchClump(g, n, clamp(x, -0.4, 0.4), clamp(z * 0.5, -0.26, 0.45));
+                done = true;
+                break;
+              }
+            }
+            if (done) break;
+            const floor = sample(h, g.x, g.z) + g.radius * 0.60;
+            if (g.y > floor) {
+              g.rest = Math.max(0, g.rest - substep * 0.5);
+              continue;
+            }
+            g.y = floor;
+            const sx = (sample(h, g.x + dx, g.z) - sample(h, g.x - dx, g.z)) / (2 * dx),
+              sz = (sample(h, g.x, g.z + dz) - sample(h, g.x, g.z - dz)) / (2 * dz),
+              damp = (0.79 - 0.18 * adhesion) / (1 + 2 * sample(water, g.x, g.z));
+            if (g.vy < -0.62) g.vy *= -(0.17 - 0.10 * adhesion);
+            else g.vy = 0;
+            g.vx = (g.vx - clamp(sx, -1.3, 1.3) * substep * 2.1) * damp;
+            g.vz = (g.vz - clamp(sz, -1.3, 1.3) * substep * 2.1) * damp;
+            if (Math.hypot(g.vx, g.vz) < 0.22 + 0.19 * adhesion && g.vy < 0.16) g.rest += substep;
+            if (g.rest > (0.11 - 0.05 * adhesion)) {
+              if (g.receiver === 2) truck.pendingGrain = Math.max(0, truck.pendingGrain - g.volume);
+              settleClump(g, g.x, g.z);
+              done = true;
+              break;
+            }
+          }
+          g.spin += dt * Math.hypot(g.vx, g.vz) / g.radius;
+          if (done) grainClumps.splice(i, 1);
+        }
+      }
+      function gatherClump(n, x, z, volume, material) {
+        if (volume <= 0) return;
+        const r = rigs[n], kind = n === 0 ? "blade" : "bucket",
+          origin = [x, sample(h, x, z) + 0.05, z],
+          captureAt = n === 0 ? [(grainRandom() - 0.5) * 1.25, 0.12, 0.28] :
+            [(grainRandom() - 0.5) * (n === 1 ? 0.92 : 0.34), 0.03, n === 1 ? 0.32 : 0.15];
+        emitClump(volume, { kind, source: n, gather: n, origin, captureAt,
+          x, y: origin[1], z, vx: 0, vy: 0, vz: 0, spread: 0.43,
+          moisture: soilClumpMoisture(x, z), material, flight: 0.09 + grainRandom() * 0.045 });
+      }
+      function wakeClump(n, x, z, volume, material, directionX, directionZ, wheel) {
+        if (volume <= 0) return;
+        const rate = wheel ? 0.87 : 1.10,
+          targetX = x + directionX * (wheel ? 0.28 : 0.42),
+          targetZ = z + directionZ * (wheel ? 0.28 : 0.42);
+        emitClump(volume, { kind: wheel ? "wheel" : "blade", source: n,
+          x: x + directionX * 0.15, y: sample(h, x, z) + 0.11, z: z + directionZ * 0.15,
+          vx: directionX * rate, vy: wheel ? 1.2 : 2.8, vz: directionZ * rate,
+          targetX, targetZ, spread: wheel ? 0.32 : 0.43, moisture: soilClumpMoisture(x, z), material });
+      }
       function discharge(n, r, x, z, amount) {
+        const slots = grainLimit - grainClumps.length;
         let q = Math.min(r.payload, Math.max(0, amount));
         if (!q) return 0;
-        const truck = rigs[2],
-          dx = x - truck.x,
-          dz = z - truck.z,
-          side = dx * Math.cos(truck.yaw) - dz * Math.sin(truck.yaw),
-          fore = dx * Math.sin(truck.yaw) + dz * Math.cos(truck.yaw),
-          rim = tf(truckBed(truck, rigFrame(truck)), [0, 0.78, clamp(fore + 1.31, 0, 1.7)]);
-        if (
-          (n === 1 || n === 3) &&
-          Math.abs(side) < 0.76 && fore > -1.42 && fore < 0.41 &&
-          truck.lift < 0.15 && toolTip(n, r)[1] > rim[1]
-        ) {
-          q = Math.min(q, truck.capacity - truck.payload);
-          if (truck.payload < 0.001) truck.haulDistance = 0;
-          truck.payload += q;
-          received += q;
-          if (q > 0) note("Truck bed receiving fill");
-        } else {
-          place(x, z, n === 2 ? 0.83 : 0.57, q);
-          if (n === 2 && r.haulDistance >= 4 && Math.hypot(x - levee[0], z - levee[1]) < 1.55)
-            delivered += q;
+        if (!slots) {
+          grainOverflow += q;
+          return 0;
         }
+        const truck = rigs[2], [tipX, tipY, tipZ] = toolTip(n, r), bedFrame = truckBed(truck, rigFrame(truck)),
+          [side, height, fore] = localPoint(bedFrame, tipX, tipY, tipZ),
+          receiver = (n === 1 || n === 3) && Math.abs(side) < 0.73 && fore > -0.10 && fore < 1.65 &&
+            truck.lift < 0.15 && height > 0.76 ? 2 : undefined;
+        if (receiver === 2) q = Math.min(q, Math.max(0, truck.capacity - truck.payload - truck.pendingGrain));
+        if (q <= 0) return 0;
         r.payload -= q;
+        const yaw = r.yaw + (n === 3 ? r.house : 0), count = q > 0.031 && slots > 1 ? 2 : 1;
+        for (let i = 0; i < count; i++) {
+          const lateral = (grainRandom() - 0.5) * (n === 2 ? 0.38 : receiver === 2 ? 0.075 : 0.17),
+            stream = n === 2 ? -0.26 : receiver === 2 ? 0 : 0.13,
+            cx = Math.cos(yaw), sz = Math.sin(yaw);
+          emitClump(q / count, { kind: n === 0 ? "blade" : n === 2 ? "truck" : "bucket", source: n, receiver,
+            x: x + cx * lateral, y: tipY + 0.035, z: z - sz * lateral,
+            vx: sz * stream, vy: receiver === 2 ? -0.7 : -0.14, vz: cx * stream,
+            targetX: x, targetZ: z, spread: n === 2 ? 0.83 : 0.57,
+            haul: n === 2 && r.haulDistance >= 4, moisture: r.cargo.moisture, material: r.cargo.material });
+        }
         return q;
       }
       const neutral = () => ({ drive: 0, turn: 0, lift: 0, side: 0, dig: 0, dump: 0, feather: 0 });
@@ -1581,13 +2038,13 @@
             (sample(h, r.x + s * 0.7, r.z + co * 0.7) - sample(h, r.x - s * 0.7, r.z - co * 0.7)) /
             1.4,
           d = sample(water, r.x, r.z),
-          m = sample(wet, r.x, r.z),
+          grip = groundTraction(cell(r.x, r.z)),
           weight = r.payload / r.capacity;
         r.slip = mix(
           r.slip,
           clamp(
             Math.abs(c.drive) *
-              (0.05 + 0.5 * Math.abs(slope) + d * 0.62 + weight * 0.16 + m * 0.1) +
+              (0.05 + 0.5 * Math.abs(slope) + d * 0.62 + weight * 0.16 + (1 - grip) * 0.43) +
               r.load * 0.19,
             0,
             0.94,
@@ -1596,7 +2053,7 @@
         );
         const feather = fine || c.feather ? 0.36 : 1,
           target =
-            ((c.drive * [2.8, 3.4, 3.65, 1.95][n] * (1 - 0.64 * r.slip)) /
+            ((c.drive * [2.8, 3.4, 3.65, 1.95][n] * (1 - 0.64 * r.slip) * (0.72 + 0.28 * grip)) /
               (1 + 0.85 * d + 0.29 * weight)) *
             feather;
         const accel = c.drive ? 2.4 : 4.3;
@@ -1631,7 +2088,7 @@
           tool.lift = Math.max(0.025, tool.lift - dt * 0.46 * feather);
         if (!blocksRig(n, r, tool)) Object.assign(r, tool);
         const [x, z] = toolPoint(n, r);
-        let work = 0;
+        let work = 0, bitePressure = 0;
         if (n === 0 && r.speed > 0.015 && r.lift < 0.57) {
           const blade = dozerBlade(r, rigFrame(r));
           for (let lane = -2; lane <= 2; lane++) {
@@ -1639,18 +2096,16 @@
               px = clamp(edgeX, -13.2, 13.2),
               pz = clamp(edgeZ, -9.7, 9.7),
               bite = Math.max(0, sample(h, px, pz) - edgeY + 0.36);
-            let q = dig(px, pz, 0.36, Math.min(0.28, bite) * moved * 0.45);
-            const hold = Math.min(q * 0.22, r.capacity - r.payload);
-            r.payload += hold;
-            q -= hold;
-            place(
-              clamp(px + s * 0.42 + co * (r.curl - 0.5) * 0.4, -13.25, 13.25),
-              clamp(pz + co * 0.42 - s * (r.curl - 0.5) * 0.4, -9.75, 9.75),
-              0.43,
-              q,
-              0.014,
-            );
-            work += q + hold;
+            bitePressure = Math.max(bitePressure, Math.max(0, groundHardness(cell(px, pz)) - 1) *
+              Math.abs(c.drive) * Math.min(1, bite * 4) * 0.55);
+            const material = {};
+            const q = dig(px, pz, 0.36, Math.min(0.28, bite) * moved * 0.45, -Infinity, true, material),
+              hold = grainClumps.length < grainLimit
+                ? Math.min(q * 0.22, Math.max(0, r.capacity - r.payload - r.pendingGrain)) : 0;
+            gatherClump(n, px, pz, hold, material);
+            wakeClump(n, px, pz, q - hold, material, s + co * (r.curl - 0.5) * 0.7,
+              co - s * (r.curl - 0.5) * 0.7, false);
+            work += q;
           }
         } else if (n === 0) work += discharge(n, r, x, z, dt * (0.25 + 2 * r.lift));
         if (n === 1 || n === 3) {
@@ -1660,18 +2115,20 @@
               (n === 1 && moved > dt * 0.10 && r.speed > 0 && r.curl < 0.66)) &&
             r.lift < 0.56;
           const tip = toolTip(n, r)[1];
-          if (digging && tip < sample(h, x, z) + 0.16) {
-            let q = dig(
+          if (digging && tip < sample(h, x, z) + 0.16 && grainClumps.length < grainLimit) {
+            bitePressure = Math.max(0, groundHardness(cell(x, z)) - 1) * 0.45;
+            const material = {};
+            const q = dig(
               x,
               z,
               n === 1 ? 0.68 : 0.48,
               Math.min(
-                r.capacity - r.payload,
+                r.capacity - r.payload - r.pendingGrain,
                 dt * (n === 1 ? 0.42 : 0.65) * (1 - 0.45 * r.lift) * feather,
               ),
-              tip - (n === 1 ? 0.13 : 0.19),
+              tip - (n === 1 ? 0.13 : 0.19), true, material,
             );
-            r.payload += q;
+            gatherClump(n, x, z, q, material);
             work += q;
           }
           if ((n === 3 && c.dump && r.curl < 0.48) || (n === 1 && (c.dump || c.side < -0.16) && r.curl < 0.34))
@@ -1679,11 +2136,14 @@
         }
         if (n === 2 && r.lift > 0.3) work += discharge(n, r, x, z, dt * 1.65 * (r.lift - 0.3));
         if (moved > 0.00002) {
+          // Shear follows the trailing contact patch of the tire or track.
+          const trackWidth = n === 2 ? 0.76 : tracked ? 0.68 : 0.70,
+            trailingAxle = -Math.sign(r.speed) * (n === 2 ? 0.91 : tracked ? 0.48 : 0.67);
           for (const side of [-1, 1]) {
-            let tx = r.x + co * side * 0.58,
-              tz = r.z - s * side * 0.58,
-              q = dig(tx, tz, 0.28, moved * 0.011 * (1 + 0.6 * weight), -Infinity, false);
-            place(tx + co * side * 0.27, tz - s * side * 0.27, 0.32, q, 0.025, false);
+            const material = {}, tx = r.x + co * side * trackWidth + s * trailingAxle,
+              tz = r.z - s * side * trackWidth + co * trailingAxle,
+              q = dig(tx, tz, 0.28, moved * 0.011 * (1 + 0.6 * weight), -Infinity, false, material);
+            wakeClump(n, tx, tz, q, material, co * side, -s * side, true);
             brush(tx, tz, 0.27, (i, w) => {
               rut[i] = Math.min(1, rut[i] + w * moved * (4 + 8 * (Math.cos(r.travel * 32) > 0.15)));
               pack[i] = Math.min(1, pack[i] + w * moved * 0.74);
@@ -1694,7 +2154,7 @@
         r.load = mix(
           r.load,
           clamp(
-            (work / dt) * 2.6 + (Math.abs(r.lift - oldLift) / dt) * 0.45 + Math.abs(c.side) * 0.22,
+            (work / dt) * 2.6 + (Math.abs(r.lift - oldLift) / dt) * 0.45 + Math.abs(c.side) * 0.22 + Math.min(0.75, bitePressure),
             0,
             1,
           ),
@@ -1734,6 +2194,8 @@
         clock += dt;
         stepNo++;
         machineStep(dt, c);
+        grainStep(dt);
+        toolCargoStep(dt);
         waterStep(dt);
         for (let i = particles.length - 1; i >= 0; i--) {
           let p = particles[i];
@@ -1913,19 +2375,35 @@ void main(){ivec2 k=ivec2(grid);F=texelFetch(field,k,0);uv=grid/vec2(127,95);P=v
 if(liquid==1){if(F.g<.018){float level=0.,count=0.;ivec2 hi=ivec2(127,95);ivec2 ofst[4]=ivec2[4](ivec2(1,0),ivec2(-1,0),ivec2(0,1),ivec2(0,-1));for(int i=0;i<4;i++){vec2 nh=texelFetch(field,clamp(k+ofst[i],ivec2(0),hi),0).rg;if(nh.y>.018){level+=nh.x+nh.y;count+=1.;}}F.g=count>0.?min(.014,level/count-F.r):-.04;}P.y+=F.g+.009+min(.007,max(0.,F.g)*.02)*sin(P.x*4.+P.z*3.+time*2.3);}
 N=vec3(0,1,0);C=vec3(1);M=liquid==1?9:8;SP=sunVP*vec4(P,1);gl_Position=VP*vec4(P,1);}`;
       const fs = `in vec3 P;in vec3 N;in vec3 C;flat in int M;in vec4 SP;in vec4 F;in vec2 uv;out vec4 frag;
-uniform vec3 eye;uniform sampler2D shadowMap;uniform sampler2D field;uniform float time;uniform sampler2D flowMap;uniform vec3 beams[8];
+uniform vec3 eye;uniform sampler2D shadowMap;uniform sampler2D field;uniform float time;uniform sampler2D flowMap,soilMap;uniform vec3 beams[8];
 float hash(vec2 p){vec3 p3=fract(vec3(p.xyx)*.1031);p3+=dot(p3,p3.yzx+33.33);return fract((p3.x+p3.y)*p3.z);}
 float bayer(){int x=int(gl_FragCoord.x)&3,y=int(gl_FragCoord.y)&3;int b[16]=int[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);return (float(b[x+4*y])+.5)/16.;}
 void main(){float d=bayer();vec3 base=C,n=normalize(N);float amb=0.;vec3 sun=normalize(vec3(-.79,.70,-.45));
 vec3 sc=SP.xyz/SP.w*.5+.5;float sh=1.;if(all(greaterThan(sc.xy,vec2(0)))&&all(lessThan(sc.xy,vec2(1))))sh=step(sc.z-.0014,texture(shadowMap,sc.xy).r);
 if(M==8){ivec2 k=clamp(ivec2(uv*vec2(127,95)+.5),ivec2(1),ivec2(126,94));float hx=texelFetch(field,k+ivec2(1,0),0).r-texelFetch(field,k-ivec2(1,0),0).r;float hz=texelFetch(field,k+ivec2(0,1),0).r-texelFetch(field,k-ivec2(0,1),0).r;n=normalize(vec3(-hx/.425,1.,-hz/.421));}else if(M==9){vec3 nn=cross(dFdx(P),dFdy(P));n=normalize(nn)*sign(nn.y);}
 float nd=dot(n,sun);
-if(M==8){float grain=hash(floor(P.xz*11.)),fleck=hash(floor(P.xz*3.5));float wet=clamp(F.b*.84+F.g*.9,0.,1.);
-float stratum=step(.83,fract(P.y*8.2+.12*sin(P.x*2.5+P.z)))*smoothstep(.05,.52,1.-n.y);
+if(M==8){vec4 soil=texture(soilMap,uv);float wet=clamp(F.b*.84+F.g*.9,0.,1.);
+float cut=smoothstep(.10,.54,1.-n.y),stratum=step(.83,fract(P.y*8.2+.12*sin(P.x*2.5+P.z)))*cut;
 base=mix(vec3(.90,.73,.47),vec3(.565,.444,.302),floor(wet*5.+d)/5.);
-float grainV=(grain>.967?.061:grain<.044?-.06:0.)+(fleck-.5)*.022-stratum*.055;
+base=mix(base,mix(vec3(.71,.52,.34),vec3(.41,.295,.208),wet*.81),soil.r*.81);
+base=mix(base,mix(vec3(.71,.66,.55),vec3(.45,.43,.36),wet*.71),soil.g*.80);
+base=mix(base,vec3(.51,.506,.458),soil.b*.91);
+vec2 section=vec2(P.x+P.z*.38,mix(P.z,P.y+P.z*.27,cut));
+vec2 cell=section*mix(18.,9.2,clamp(wet*.76+soil.g*.56,0.,1.));
+vec2 ij=floor(cell),q=(fract(cell)-(.28+.44*vec2(hash(ij),hash(ij+91.))))*vec2(1.,1.24);
+float visible=1.-smoothstep(.48,1.52,max(length(dFdx(cell)),length(dFdy(cell))));
+float grainV=((hash(ij+17.)-.48)*.23+.032*step(q.y,0.)-.014)*step(dot(q,q),.123)*visible;
+float dense=max(0.,2.*soil.a-1.),spread=max(0.,1.-2.*soil.a);
+grainV*=mix(1.,.50,dense)*(1.+soil.g*.29+spread*.45);
+vec2 across=normalize(vec2(-n.z,n.x)+vec2(.13,.046));
+vec2 broach=vec2(dot(P.xz,across),dot(P.xz,vec2(-across.y,across.x)))*vec2(6.6,3.6);
+vec2 chip=(fract(broach)-.5)*vec2(1.3,1.);
+float catchlight=(1.-smoothstep(.28,.52,abs(chip.x)+abs(chip.y)))*spread;
+grainV+=catchlight*(step(chip.y,-.4*chip.x)*.115-.054+(.50-hash(floor(broach)+29.))*.054);
+grainV-=stratum*(.038+.026*soil.g);
 base+=vec3(grainV,grainV*.82,grainV*.52);
-float track=F.a>0.?min(F.a,1.):0.;base*=1.-track*(.12+.14*step(.47,fract((P.z+P.x*.46)*6.)));
+float track=F.a>0.?min(F.a,1.):0.;base*=1.-track*(.13+.09*step(.62,fract((P.z+P.x*.46)*7.))) - dense*.054;
+base=mix(base,base*vec3(1.13,1.075,.99)+vec3(.017,.007,0.),spread*(1.-wet*.67));
 }else if(M==9){if(F.g<.018)discard;float deep=clamp((F.g-.018)/.42,0.,1.),dep=floor(deep*4.+d)/4.;
 vec3 shallow=mix(vec3(.66,.59,.36),vec3(.41,.61,.52),smoothstep(.02,.105,F.g));vec3 waterC=mix(shallow,vec3(.185,.413,.432),dep);
 vec2 flow=texture(flowMap,uv).rg;float speed=length(flow);vec2 axis=normalize(flow+vec2(.14,.26));vec2 edge=vec2(-axis.y,axis.x);
@@ -1941,7 +2419,7 @@ frag=vec4(floor(clamp(waterC*(.79+.21*sh),0.,1.)*24.+d)/24.,1);return;
 }else if(M==2){float p=hash(floor(P.xz*4.)),g=hash(floor(P.xz*9.));base+=vec3(.029,.032,.020)*(p>.52?1.:-.4);base*=g>.96?1.055:g<.05?.94:1.;
 }else if(M==3){float grain=hash(floor(P.xz*8.));base*=grain>.95?1.035:grain<.06?.95:1.;
 }else if(M==7){vec2 coord=vec2(P.x+P.z*.73,P.y+P.z*.29);float cluster=sin(coord.x*5.3+sin(coord.y*5.))*sin(coord.y*4.6);float leaves=hash(floor(coord*9.));base*=1.+(cluster>.49?.11:cluster<-.5?-.11:0.);if(leaves>.95&&nd>.2)base+=vec3(.1,.105,.04);
-}else if(M==5){amb=.45;}else if(M==6){amb=.12;base*=.85+.15*step(.48,fract(P.x*2.+P.y*2.-P.z));}
+}else if(M==10){base*=.93+.13*hash(floor(P.xz*36.)+floor(P.y*38.));}else if(M==11){base*=.97+.062*hash(floor(P.xz*36.)+floor(P.y*38.));amb=.28;}else if(M==5){amb=.45;}else if(M==6){amb=.12;base*=.85+.15*step(.48,fract(P.x*2.+P.y*2.-P.z));}
 float light=clamp(.53+max(-.18,nd)*.44,.36,1.04);light=mix(light*.73,light,sh);light=M==4?floor(light*5.+.45)/5.:floor(light*20.+d)/20.;
 vec3 outC=base*light+vec3(.074,.057,.047)+vec3(.065,.026,-.022)*max(nd,0.)*sh;
 if(M==8){for(int i=0;i<4;i++){vec3 delta=P-beams[i*2];float dist=length(delta);float cone=dot(delta/max(dist,.001),beams[i*2+1]);outC+=vec3(.20,.15,.045)*step(.91,cone)*max(0.,1.-dist/3.3);}}
@@ -1984,6 +2462,17 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
       const flowPixels = new Float32Array(NN * 2),
         flowTex = tex(3, gl?.RG32F, NX, NZ, gl?.RG, gl?.FLOAT);
       const fieldTex = tex(0, gl?.RGBA32F, NX, NZ, gl?.RGBA, gl?.FLOAT);
+      const soilPixels = new Uint8Array(NN * 4),
+        soilTex = tex(5, gl?.RGBA8, NX, NZ, gl?.RGBA, gl?.UNSIGNED_BYTE);
+      if (gl) {
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      }
+      const gradeBase = new Float32Array(NN);
+      let materialFrame = -1;
+      function newFill(i) {
+        return clamp((h[i] - gradeBase[i]) * 2, 0, 1);
+      }
       let shadowSize = 1024;
       const shadowTex = tex(
           1,
@@ -2106,7 +2595,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
       function face(points, hex, mat = material) {
         let p = points.map((v) => tf(matrix, v)),
           n = norm(cross(sub(p[1], p[0]), sub(p[2], p[0]))),
-          c = color(hex);
+          c = typeof hex === "string" ? color(hex) : hex;
         for (let k = 1; k < p.length - 1; k++)
           for (let j of [0, k, k + 1]) verts.push(...p[j], ...n, ...c, mat);
       }
@@ -2261,6 +2750,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         stoneMesh = mesh(true),
         rigMeshes = [mesh(true), mesh(true), mesh(true), mesh(true)],
         looseMesh = mesh(true),
+        grainMesh = mesh(true),
         emptyVAO = gl?.createVertexArray();
       const brass = "#dcb465",
         dark = "#343a33",
@@ -2676,10 +3166,88 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             box(sx - 0.034, y, -9.53, 0.04, 0.1, 0.03, "#dce3be", 5);
           }
         }
-        for (let p of particles) {
-          box(p.x, p.y, p.z, 0.055, 0.052, 0.055, p.type ? "#d8debc" : "#bf934e", 5);
+        for (const p of particles) {
+          if (p.type) box(p.x, p.y, p.z, 0.055, 0.052, 0.055, "#d8debc", 5);
         }
         upload(looseMesh);
+      }
+      // One mesh for the trajectory of every mass-carrying grain. The same
+      // faces are consumed by the CPU rasterizer when WebGL is unavailable.
+      const earthGrainRing = Array.from({ length: 5 }, (_, i) => [
+        Math.cos((i * TAU) / 5),
+        Math.sin((i * TAU) / 5),
+      ]);
+      function earthGrainColor(moisture, tone, material) {
+        const amount = material?.gravel ?? 0;
+        const loam = material?.loam ?? 0;
+        const colors = [
+          mix(mix(.90, .72, loam), .54, moisture),
+          mix(mix(.73, .52, loam), .411, moisture),
+          mix(mix(.48, .34, loam), .27, moisture),
+        ];
+        return colors.map((c, i) => mix(c, [.68, .65, .55][i], amount * .68) * tone);
+      }
+      function earthClod(p) {
+        const volume = Math.max(0, p.volume);
+        if (volume < 1e-7) return;
+        const moisture = clamp(p.moisture ?? sample(wet, p.x, p.z), 0, 1);
+        const angle = p.spin ?? 0;
+        const tone = .93 + .12 * Math.sin((p.tone ?? angle) * 5.3);
+        const dry = moisture < .33 && (p.material?.loam ?? 0) + (p.material?.gravel ?? 0) < .34;
+        const split = dry && volume > .003, speed = Math.hypot(p.vx, p.vz), tangent = dry && speed > .08 ? Math.atan2(p.vx, p.vz) : angle;
+        const grains = [];
+        for (let part = 0, count = split ? 2 : 1; part < count; part++) {
+          const fraction = split ? (part ? .37 : .63) : 1;
+          const variant = part ? 1.98 - tone : tone;
+          const ink = earthGrainColor(moisture, dry ? mix(1, variant, .35) : variant, p.material);
+          const spin = dry ? tangent + (part ? -.22 : .18) : angle;
+          const settled = Math.abs(p.vy) < .06, squash = (settled ? .65 : 1) * (dry ? .62 : 1);
+          const ring = earthGrainRing.map(([a, b], i) => {
+            const radius = .95 + .14 * Math.sin(i * 5.3 + variant * 18);
+            return [a * radius * (dry ? .84 : 1.08 + moisture * .16), squash * .15 * Math.sin(i * 7), b * radius * (dry ? 1.65 : 1)];
+          });
+          const apex = [.19, squash * (.73 + .17 * moisture), -.13];
+          const foot = [-.18, -squash * .63, .11];
+          let sixVolume = 0;
+          const center = [0, 0, 0];
+          for (let i = 0; i < ring.length; i++) {
+            const a = ring[i], b = ring[(i + 1) % ring.length], edge = cross(b, a);
+            const upper = dot(edge, apex), lower = -dot(edge, foot);
+            sixVolume += upper + lower;
+            for (let axis = 0; axis < 3; axis++)
+              center[axis] += (a[axis] + b[axis]) * (upper + lower) + apex[axis] * upper + foot[axis] * lower;
+          }
+          const size = Math.cbrt(6 * volume * fraction / Math.abs(sixVolume));
+          const fit = point => point.map((coord, axis) => (coord - center[axis] / (4 * sixVolume)) * size);
+          const pitch = dry
+            ? (settled ? 0 : Math.atan2(p.vy, Math.max(.16, speed)) * .73) + Math.sin(angle) * .14
+            : settled ? Math.sin(spin) * .14 : spin * .59;
+          const rotation = joint(eye4(), 0, 0, 0, pitch, spin, pitch * .24);
+          grains.push({ ink, vertices: [...ring, apex, foot].map(point => tf(rotation, fit(point))) });
+        }
+        const axis = [Math.cos(tangent), 0, -Math.sin(tangent)];
+        const reach = split
+          ? Math.max(...grains[0].vertices.map(v => dot(v, axis))) - Math.min(...grains[1].vertices.map(v => dot(v, axis)))
+          : 0;
+        for (let part = 0; part < grains.length; part++) {
+          const { ink, vertices } = grains[part];
+          const side = reach * (part ? .63 : -.37);
+          const points = vertices.map(([x, y, z]) => [x + p.x + side * axis[0], y + p.y, z + p.z + side * axis[2]]);
+          for (let i = 0; i < 5; i++) {
+            const j = (i + 1) % 5;
+            face([points[j], points[i], points[5]], ink, dry ? 11 : 10);
+            face([points[i], points[j], points[6]], ink, dry ? 11 : 10);
+          }
+        }
+      }
+      let grainClock = -1;
+      function updateEarthGrains() {
+        const list = typeof grainClumps === "undefined" ? [] : grainClumps;
+        if (list.length === 0 && grainMesh.count === 0) return;
+        if (list.length && clock === grainClock && grainMesh.count) return;
+        for (const p of list) earthClod(p);
+        upload(grainMesh);
+        grainClock = clock;
       }
       const paint = ["#efb541", "#d5a34d", "#c78155", "#e9a041"],
         bright = ["#ffd269", "#f0ca6b", "#ebad65", "#ffcd60"],
@@ -2840,8 +3408,10 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         box(0, 0.17, section[1][0] - 0.02, width * 0.54, 0.28, 0.10, "#565c50");
         if (r.payload > 0.005) {
           const fill = r.payload / r.capacity, height = 0.035 + 0.23 * fill;
-          blob(0, -0.115 + height * 0.58, 0.22 * lip[2], half * 0.79, height, 0.48 * lip[2],
-            "#c5a16a", 0, 8);
+          const cargo = r.cargo;
+          const ink = earthGrainColor(cargo?.moisture ?? .12, 1, cargo?.material);
+          blob(0, -0.115 + height * 0.58, (0.22 + .17 * (cargo?.shift ?? 0)) * lip[2],
+            half * 0.77, height, 0.46 * lip[2], ink, .15, 8, 10);
         }
       }
       function buildRig(n) {
@@ -2929,17 +3499,26 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
                 box(0, -0.50, -0.056, 1.43, 0.065, 0.018, ac);
               });
               box(0, 0.47, 1.73, 1.6, 0.81, 0.12, p);
-              if (r.payload > 0.006)
-                blob(
-                  0,
-                  0.19 + (0.19 * r.payload) / r.capacity,
-                  0.78 - 0.28 * r.lift,
-                  0.63,
-                  (0.42 * r.payload) / r.capacity,
-                  0.75 - 0.15 * r.lift,
-                  "#c7a46a",
-                  0.3,
-                );
+              if (r.payload > 0.006) {
+                const cargo = r.cargo, fill = Math.min(1, r.payload / r.capacity);
+                const offset = .78 + .62 * (cargo?.shift ?? 0);
+                const moisture = cargo?.moisture ?? .12;
+                const ink = earthGrainColor(moisture, .97, cargo?.material);
+                const span = .63 + .60 * Math.sqrt(fill);
+                const grid = Array.from({length: 5}, (_, j) => Array.from({length: 5}, (_, i) => {
+                  const x = clamp((i / 4 - .5) * (1.08 + .25 * fill) + .25 * (cargo?.side ?? 0), -.70, .70);
+                  const z = clamp(offset + (j / 4 - .5) * span, -.064, 1.66);
+                  const edge = Math.min(i, 4 - i, j, 4 - j);
+                  const lump = (1 - Math.abs(i / 2 - 1) * .34) * (1 - Math.abs(j / 2 - 1) * .44);
+                  const relief = .84 + .24 * Math.sin(i * 4.3 + j * 5.3);
+                  return [x, .124 + (edge > 0 ? .62 * fill * lump * relief : .041 * fill), z];
+                }));
+                for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) {
+                  const a = grid[j][i], b = grid[j][i + 1], c = grid[j + 1][i + 1], d = grid[j + 1][i];
+                  face([a, d, b], ink, 10);
+                  face([b, d, c], ink, 10);
+                }
+              }
             });
             piston(
               [0, 0.61, -0.58],
@@ -3064,6 +3643,9 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           green = color[1] * shade + 10;
           blue = color[2] * shade + 8;
         }
+        const ground = !swDepthOnly && swMat === 8;
+        const wx0 = ground ? a[4] - c[4] : 0, wx1 = ground ? b[4] - c[4] : 0;
+        const wz0 = ground ? a[5] - c[5] : 0, wz1 = ground ? b[5] - c[5] : 0;
         for (let y = t; y <= bot; y++) {
           let u = du * (l + 0.5 - x2) + su * (y + 0.5 - y2),
             v = dv * (l + 0.5 - x2) + sv * (y + 0.5 - y2);
@@ -3077,16 +3659,20 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             let bayer = thresholds[(x & 3) + 4 * (y & 3)] * 0.5,
               n = ((Math.imul(x, 374761393) ^ Math.imul(y, 668265263)) >>> 11) % 71,
               tex = 0;
-            if (swMat === 8 || swMat === 2 || swMat === 3) tex = n < 3 ? -9 : n > 67 ? 7 : 0;
+            if (ground) {
+              const wx = Math.floor(c[4] + u * wx0 + v * wx1), wz = Math.floor(c[5] + u * wz0 + v * wz1);
+              const grit = (Math.imul(wx, 1597334677) ^ Math.imul(wz, 3812015801)) >>> 26;
+              tex = grit < 5 ? -7 : grit > 57 ? 6 : 0;
+            } else if (swMat === 2 || swMat === 3) tex = n < 3 ? -9 : n > 67 ? 7 : 0;
             else if (swMat === 1) tex = (y + (x >> 3)) % 5 === 0 ? -5 : 0;
             else if (swMat === 7) tex = n > 56 ? 9 : 0;
             else if (swMat === 9)
               tex =
                 (x + (y >> 1) + ((clock * 3) | 0)) % 23 < 5 && (y + (x >> 2)) % 9 === 0 ? 30 : 0;
             let k = i * 4;
-            swImage.data[k] = (red + tex + bayer) & 248;
-            swImage.data[k + 1] = (green + tex + bayer) & 248;
-            swImage.data[k + 2] = (blue + tex + bayer) & 248;
+            swImage.data[k] = clamp(red + tex + bayer, 0, 255) & 248;
+            swImage.data[k + 1] = clamp(green + tex + bayer, 0, 255) & 248;
+            swImage.data[k + 2] = clamp(blue + tex + bayer, 0, 255) & 248;
             swImage.data[k + 3] = 255;
             swTags[i] = swMat >= 4 && swMat <= 6 ? 1 : 0;
           }
@@ -3108,7 +3694,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           if (!swDepthOnly) {
             swMat = f[i + 9];
             let s = Math.max(-0.18, -0.69 * f[i + 3] + 0.62 * f[i + 4] - 0.4 * f[i + 5]);
-            swIllum = swMat === 5 ? 0.94 : 0.55 + s * 0.45;
+            swIllum = swMat === 5 ? 0.94 : swMat === 11 ? .72 + s * .24 : 0.55 + s * 0.45;
             swCol = [f[i + 6] * 255, f[i + 7] * 255, f[i + 8] * 255];
             swShade(
               (f[i] + f[i + 10] + f[i + 20]) / 3,
@@ -3126,7 +3712,12 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             let j = Math.min(NZ - 1, v),
               k = Math.min(NX - 1, u);
             let i = k + j * NX;
-            swProject(xx(i), h[i] + (liquid ? water[i] + 0.02 : 0), zz(i), swGrid[i]);
+            const point = swGrid[i], x = xx(i), z = zz(i);
+            swProject(x, h[i] + (liquid ? water[i] + 0.02 : 0), z, point);
+            if (!swDepthOnly && !liquid) {
+              point[4] = (x + z * .38) * 16;
+              point[5] = z * 16;
+            }
           }
         for (let j = 0; j < NZ - 1; j += 2)
           for (let k = 0; k < NX - 1; k += 2) {
@@ -3154,8 +3745,19 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
                   (0.54 +
                     0.45 *
                       Math.max(-0.18, (-0.69 * nx + 0.62 - 0.4 * nz) / Math.hypot(nx, 1, nz))) *
-                  (1 - rut[i] * 0.18);
-                swCol = [mix(230, 143, v), mix(187, 113, v), mix(121, 77, v)];
+                  (1 - rut[i] * .23 - pack[i] * .05);
+                const exposed = typeof groundLoam !== "undefined";
+                const loam = exposed ? groundLoam[i] : 0;
+                const gravel = exposed ? groundGravel[i] : 0;
+                const rock = exposed ? groundRock[i] : 0;
+                const relief = ((Math.imul(i + 1, 1597334677) >>> 25) / 127 - .5) * (4 + v * 3);
+                const cut = Math.min(1, Math.hypot(nx, nz) * .52);
+                const stratum = (h[i] * 8 + x * .22 + z * .18) % 1;
+                const band = stratum > .79 ? cut * 8 : 0;
+                swCol = [mix(230, 143, v), mix(187, 113, v), mix(121, 77, v)].map((c, j) =>
+                  mix(mix(mix(c, [168, 122, 77][j], loam * .72), [168, 158, 132][j], gravel * .76), [124, 122, 109][j], rock * .88) +
+                  relief - band + (1-v*.67)*newFill(i)*[16,10,3][j]
+                );
               }
             }
             swTri(swGrid[i], swGrid[ir], swGrid[ib]);
@@ -3176,6 +3778,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         } else swDepth.set(swStaticShadow);
         swTerrain(false);
         for (let m of rigMeshes) swMesh(m);
+        swMesh(grainMesh);
         swWidth = w;
         swHeight = hh;
         swDepth = swZ;
@@ -3206,6 +3809,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         for (let m of rigMeshes) swMesh(m);
         swMesh(stoneMesh);
         swMesh(looseMesh);
+        swMesh(grainMesh);
         swTerrain(true);
         for (let y = 1; y < hh - 1; y++)
           for (let x = 1; x < w - 1; x++) {
@@ -3325,6 +3929,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         gl.uniformMatrix4fv(loc(p, "sunVP"), false, sunVP);
         gl.uniform1i(loc(p, "field"), 0);
         gl.uniform1i(loc(p, "flowMap"), 3);
+        gl.uniform1i(loc(p, "soilMap"), 5);
         gl.uniform1i(loc(p, "shadowMap"), 1);
         gl.uniform1f(loc(p, "time"), clock);
         gl.uniform3fv(loc(p, "eye"), eyePos);
@@ -3362,7 +3967,10 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         updateCamera(dt);
         let w = glCanvas.width,
           hh = glCanvas.height;
+        if (materialFrame < 0 || clock < materialFrame || stepNo === 0) gradeBase.set(h);
+        materialFrame = clock;
         if (gl && fieldDirty) {
+          const exposed = typeof groundLoam !== "undefined";
           for (let i = 0; i < NN; i++) {
             flowPixels[2 * i] = (qx[i] * dx) / (water[i] + 0.035);
             flowPixels[2 * i + 1] = (qz[i] * dz) / (water[i] + 0.035);
@@ -3370,6 +3978,10 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             pixels[i * 4 + 1] = water[i];
             pixels[i * 4 + 2] = wet[i];
             pixels[i * 4 + 3] = water[i] > 0.016 ? -vel[i] : rut[i];
+            soilPixels[i * 4] = exposed ? Math.round(255 * groundLoam[i]) : 0;
+            soilPixels[i * 4 + 1] = exposed ? Math.round(255 * groundGravel[i]) : 0;
+            soilPixels[i * 4 + 2] = exposed ? Math.round(255 * groundRock[i]) : 0;
+            soilPixels[i * 4 + 3] = Math.round(127.5 * (1 + pack[i] - newFill(i)));
           }
           gl.activeTexture(gl.TEXTURE0);
           gl.bindTexture(gl.TEXTURE_2D, fieldTex);
@@ -3377,8 +3989,12 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           gl.activeTexture(gl.TEXTURE3);
           gl.bindTexture(gl.TEXTURE_2D, flowTex);
           gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, NX, NZ, gl.RG, gl.FLOAT, flowPixels);
+          gl.activeTexture(gl.TEXTURE5);
+          gl.bindTexture(gl.TEXTURE_2D, soilTex);
+          gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, NX, NZ, gl.RGBA, gl.UNSIGNED_BYTE, soilPixels);
           fieldDirty = false;
         }
+        updateEarthGrains();
         for (let i = 0; i < 4; i++) {
           let r = rigs[i],
             key = [
@@ -3393,6 +4009,9 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
               r.lift,
               r.curl,
               r.payload,
+              r.cargo?.shift ?? 0,
+              r.cargo?.side ?? 0,
+              r.cargo?.moisture ?? 0,
               r.sway,
               r.reach,
             ]
@@ -3478,7 +4097,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
             gl.NEAREST,
           );
           grid(gridDepth, sunVP, 0);
-          objects(meshDepth, sunVP, [stoneMesh, ...rigMeshes, looseMesh]);
+          objects(meshDepth, sunVP, [stoneMesh, ...rigMeshes, looseMesh, grainMesh]);
           gl.disable(gl.POLYGON_OFFSET_FILL);
         }
         gl.viewport(0, 0, w, hh);
@@ -3513,7 +4132,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         );
         gl.enable(gl.DEPTH_TEST);
         grid(terrainP, VP, 0);
-        objects(solidP, VP, [stoneMesh, ...rigMeshes, looseMesh]);
+        objects(solidP, VP, [stoneMesh, ...rigMeshes, looseMesh, grainMesh]);
         grid(terrainP, VP, 1);
         gl.bindFramebuffer(gl.FRAMEBUFFER, null);
         gl.disable(gl.DEPTH_TEST);
@@ -4015,7 +4634,27 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
         rect(c, tx, ty - 6, 2, tiny ? 13 : 16, kind === 2 ? "#dea869" : "#a7c6a9");
         txt(c, text, tx + 6, ty + (tiny ? 0 : 2), size, kind === 2 ? "#f1d6a7" : "#d4e7c8", true);
       }
+let lastSoilReadout = -Infinity;
+function refreshSoilReadout(force=false) {
+  const output = document.getElementById('soilReadout');
+  if (!output || !$('guide').open) return;
+  const now = performance.now();
+  if (!force && now - lastSoilReadout < 250) return;
+  lastSoilReadout = now;
+  const [x,z] = toolPoint(active,rigs[active]);
+  const material = groundMaterial(cell(x,z));
+  const labels = {sand:'loose sand',loam:'loam',gravel:'gravel',rock:'bedrock'};
+  const dominant = Object.keys(labels).reduce((a,b) => material[a] >= material[b] ? a : b);
+  const movingLitres = grainClumps.reduce((total,g) => total + g.volume, 0);
+  const millilitres = movingLitres * 1000;
+  const quantity = millilitres > 0 && millilitres < .1 ? '<0.1' : millilitres < 10 ? Number(millilitres.toFixed(1)) : Math.round(millilitres);
+  const value = 'Ground at tool · ' + labels[dominant] + '  /  Moving soil · ' +
+    grainClumps.length + (grainClumps.length === 1 ? ' clump · ' : ' clumps · ') + quantity + ' mL';
+  if (output.textContent !== value) output.textContent = value;
+}
+
       function drawHUD() {
+        refreshSoilReadout();
         let c = oc;
         c.clearRect(0, 0, stageW, stageH);
         if (raining) {
@@ -4199,6 +4838,7 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
       $("scenario").onchange = (e) => adaptScenario(+e.target.value);
       $("settings").onclick = () => {
         $("guide").showModal();
+        refreshSoilReadout(true);
         keys.clear();
       };
       $("close").onclick = () => $("guide").close();
@@ -4641,6 +5281,9 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
           get rigs() {
             return rigs;
           },
+          get grains() {
+            return grainClumps;
+          },
           get state() {
             return {
               mode,
@@ -4665,6 +5308,10 @@ outC=mix(outC,base,amb);frag=vec4(floor(clamp(outC,0.,1.)*28.+d)/28.,M==4||M==5|
               initialCrest: peakDam,
               verts: yardMesh.count,
               mass: sandMass(),
+              grainVolume: grainClumps.reduce((sum, g) => sum + g.volume, 0),
+              grainLimit,
+              grainSettled,
+              grainOverflow,
               initial: totalSand,
               waterError: waterMass() + outWater - addedWater - initialWater,
               minH: Math.min(...h),
